@@ -5,10 +5,10 @@ jobs:
     runs-on: ubuntu-22.04
     container: ros:humble-ros-base-jammy
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: apt-get update && apt-get install -y python3-pip python3-pytest python3-yaml
       - run: pip3 install "mujoco>=3.2,<4" "trimesh>=4,<5"
-      - run: PYTHONPATH=src/mj_bridge pytest -q src/mj_bridge/test/test_benchmark_core.py
+      - run: PYTHONPATH=src/mj_bridge python3 -m pytest -q src/mj_bridge/test/test_benchmark_core.py
       - run: PYTHONPATH=src/mj_bridge python3 -m mj_bridge.benchmark_cli validate examples/products/traffic_light.yaml
       - run: PYTHONPATH=src/mj_bridge python3 -m mj_bridge.benchmark_cli generate --product examples/products/traffic_light.yaml --seed 42 --output-dir /tmp/episode
       - run: python3 -c "import mujoco; mujoco.MjModel.from_xml_path('/tmp/episode/scene.xml')"
