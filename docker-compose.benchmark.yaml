@@ -1,0 +1,15 @@
+services:
+  lego-bench:
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+    network_mode: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - MUJOCO_GL=egl
+    volumes:
+      - ./runs:/workspace/runs
+    command: >-
+      . /opt/ros/humble/setup.bash && . install/setup.bash &&
+      python3 -m mj_bridge.benchmark_cli run --product examples/products/traffic_light.yaml
+      --seed 0 --headless --observation oracle --output-dir runs/docker

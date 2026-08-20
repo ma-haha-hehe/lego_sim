@@ -1,0 +1,43 @@
+<mujoco model="panda_scene">
+
+  <include file="panda.xml"/>
+
+  <asset>
+    <mesh name="lego_2x2" file="LEGO_Duplo_brick_2x2.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="lego_2x4" file="LEGO_Duplo_brick_2x4.stl" scale="0.001 0.001 0.001"/>
+  </asset>
+
+  <worldbody>
+
+    <camera name="realsense" pos="0.4 0 1.2" fovy="60"/>
+    <light pos="0 0 1.5" dir="0 0 -1"/>
+
+    <geom name="floor" type="plane" size="0 0 0.05"/>
+
+    <body name="table" pos="0.40 0 0.02">
+        <geom
+            name="table_geom"
+            type="box"
+            size="0.30 0.50 0.02"
+            contype="1"
+            conaffinity="1"
+            friction="3 0.1 0.01"
+            solref="0.001 1"
+            solimp="0.999 0.9999 0.0001"
+            density="10000"
+            />
+    </body>
+    <body name="assembly_base_plate" pos="0.25 0.0 0.043">
+        <geom
+          name="assembly_base_plate_geom"
+          type="box"
+          size="0.192 0.192 0.003"
+          rgba="0.15 0.15 0.15 1"
+          friction="5.0 0.2 0.02"
+          solref="0.004 1"
+          solimp="0.90 0.98 0.002"/>
+      </body>
+
+  </worldbody>
+
+</mujoco>

@@ -1,1 +1,165 @@
-# lego_sim
+# LEGO Assembly Benchmark for Panda and MuJoCo
+
+A reproducible ROS 2 benchmark for evaluating manipulation, perception, and assembly methods with a Franka Emika Panda robot in MuJoCo.
+
+The benchmark takes a product description in YAML, creates the required loose parts at deterministic random poses, exposes standard ROS 2 control and observation interfaces, and evaluates the final assembly. The environment is independent of the policy: a method may use MoveIt, direct joint trajectories, ground-truth state, RGB-D input, or its own perception and planning stack.
+
+## Features
+
+- Deterministic episode generation from a product YAML and integer seed
+- Non-overlapping random placement inside a fixed table workspace
+- Panda arm and gripper control through `FollowJointTrajectory`
+- MoveIt 2 planning and trajectory execution
+- Ground-truth and RGB-D observation modes
+- RGB, metric depth, instance segmentation, camera calibration, and TF
+- Explicit reset and result services for automated evaluation
+- Per-part pose errors, completion rate, runtime, timeout, collision, and stability metrics
+- Headless execution, batch generation, Docker configuration, and CI
+- Compatibility with product files used by the original project
+
+## Supported platform
+
+The reference setup targets Ubuntu 22.04, ROS 2 Humble, Python 3.10, MuJoCo 3.x, and MoveIt 2.
+
+## Installation
+
+```bash
+git clone https://github.com/ma-haha-hehe/lego_sim.git
+cd lego_sim
+bash install_sim_system_deps.sh
+source enter_sim_env.sh
+colcon build --packages-select mj_bridge --symlink-install
+source enter_sim_env.sh
+```
+
+`enter_sim_env.sh` activates ROS 2, the local Python virtual environment, and the built benchmark package. It does not start a simulation.
+
+## Quick start
+
+Validate a product and generate a standalone episode:
+
+```bash
+lego-bench validate examples/products/traffic_light.yaml
+lego-bench generate \
+  --product examples/products/traffic_light.yaml \
+  --seed 42 \
+  --output-dir runs/traffic-light-42
+```
+
+Start the complete Panda and MoveIt pipeline:
+
+```bash
+ros2 launch mj_bridge lego_bench.launch.py \
+  product:=$PWD/examples/products/traffic_light.yaml \
+  seed:=42 \
+  headless:=false \
+  observation:=oracle \
+  connection_mode:=snap
+```
+
+For a headless RGB-D episode, set `headless:=true` and `observation:=rgbd`.
+
+## Product format
+
+Products use schema version 1:
+
+```yaml
+schema_version: 1
+product:
+  name: traffic_light
+blocks:
+  - id: green_base
+    type: brick_2x2
+    color: green
+    target:
+      position: [0.0, 0.0, 0.0]
+      yaw_deg: 0
+```
+
+Target positions are expressed in metres relative to the center of the assembly plate. Yaw is expressed in degrees. Part IDs must be unique.
+
+Version 0.1 provides `brick_2x2` and `brick_4x2`. A product may contain any number and arrangement of registered parts that fit in the configured source and assembly workspaces. See [Product format](docs/product-format.md) for the schema, coordinate conventions, and legacy conversion rules.
+
+## ROS 2 interface
+
+| Interface | Type | Purpose |
+|---|---|---|
+| `/mj_panda_arm_controller/follow_joint_trajectory` | Action | Panda arm control |
+| `/mj_panda_hand_controller/follow_joint_trajectory` | Action | Gripper control |
+| `/joint_states` | Topic | Robot state |
+| `/lego_bench/goal` | Topic | Product and target poses as JSON |
+| `/lego_bench/ground_truth` | Topic | Authoritative part poses as JSON |
+| `/camera/color/image_raw` | Topic | `rgb8` image |
+| `/camera/depth/image_raw` | Topic | `32FC1` metric depth |
+| `/camera/segmentation` | Topic | MuJoCo `32SC2` object ID/type image |
+| `/camera/camera_info` | Topic | Pinhole camera calibration |
+| `/mj_bridge/benchmark_state` | Topic | Live score as JSON |
+| `/mj_bridge/reset` | Service | Restore the initial episode state |
+| `/mj_bridge/result` | Service | Score and export the current state |
+
+The full launch also provides MoveIt actions and services, including `/move_action`, `/execute_trajectory`, and `/plan_kinematic_path`. The camera frame is `realsense`; its static transform from `world` is published by the launch file.
+
+An integration skeleton is available in [examples/external_executor.py](examples/external_executor.py).
+
+## Evaluation modes
+
+`observation:=oracle` publishes exact MuJoCo poses and is intended for planning and control experiments. `observation:=rgbd` enables image-based evaluation.
+
+`connection_mode:=snap` uses the benchmark's documented stud-alignment model. `connection_mode:=physics` disables automatic engagement. Results should only be compared when product, seed, observation mode, connection mode, tolerances, and simulator version are identical.
+
+Query and save a result with:
+
+```bash
+ros2 service call /mj_bridge/result std_srvs/srv/Trigger '{}'
+```
+
+The episode directory contains the normalized product, episode manifest, generated MuJoCo scene, actual final state, and result JSON. The manifest is the complete record needed to reproduce the initial scene.
+
+## Batch experiments
+
+```bash
+lego-bench batch-generate \
+  --product examples/products/traffic_light.yaml \
+  --first-seed 0 \
+  --count 100 \
+  --output-dir runs/traffic-light
+
+lego-bench summarize runs/traffic-light
+```
+
+## Docker
+
+```bash
+docker compose -f docker-compose.benchmark.yaml up --build
+```
+
+The Compose configuration uses host networking for ROS 2 discovery and stores episode outputs under `runs/`.
+
+## Repository layout
+
+```text
+examples/                     Product and executor examples
+docs/                         Format, architecture, and integration notes
+src/mj_bridge/launch/         Complete ROS 2 launch file
+src/mj_bridge/mj_bridge/      Simulator bridge, generator, schema, and assets
+src/mj_bridge/test/           Determinism, compatibility, and scoring tests
+```
+
+## Testing
+
+```bash
+source enter_sim_env.sh
+PYTHONPATH=src/mj_bridge python -m pytest -q src/mj_bridge/test
+```
+
+## License and third-party material
+
+The benchmark is released under the Apache License 2.0. The Panda assets retain their original Apache-2.0 notice. Public benchmark scenes use box and cylinder primitives for the assembly parts; legacy meshes with incomplete provenance are not included. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+LEGO is a trademark of the LEGO Group, which does not sponsor, authorize, or endorse this project.
+
+## Citation
+
+If this benchmark supports published work, cite the repository and the version or commit used for the experiments. A machine-readable entry is provided in [CITATION.cff](CITATION.cff).
+
+

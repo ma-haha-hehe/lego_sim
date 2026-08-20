@@ -1,0 +1,16 @@
+schema_version: 1
+product:
+  name: traffic_light
+blocks:
+  - id: green_base
+    type: brick_2x2
+    color: green
+    target: {position: [0.0, 0.0, 0.0], yaw_deg: 0}
+  - id: yellow_middle
+    type: brick_2x2
+    color: yellow
+    target: {position: [0.0, 0.0, 0.0192], yaw_deg: 0}
+  - id: red_top
+    type: brick_2x2
+    color: red
+    target: {position: [0.0, 0.0, 0.0384], yaw_deg: 0}

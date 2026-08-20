@@ -1,0 +1,19 @@
+FROM ros:humble-ros-base-jammy
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip python3-colcon-common-extensions \
+    ros-humble-control-msgs ros-humble-moveit \
+    ros-humble-moveit-resources-panda-moveit-config \
+    ros-humble-ros2-control ros-humble-ros2-controllers \
+    ros-humble-rviz2 ros-humble-xacro libgl1 libglfw3 \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -m pip install --no-cache-dir "mujoco>=3.2,<4" "trimesh>=4,<5" PyYAML pytest
+
+WORKDIR /workspace
+COPY src/mj_bridge src/mj_bridge
+COPY examples examples
+RUN . /opt/ros/humble/setup.sh && colcon build --packages-select mj_bridge --symlink-install
+
+ENTRYPOINT ["/bin/bash", "-lc"]
+CMD [". /opt/ros/humble/setup.bash && . install/setup.bash && python3 -m mj_bridge.benchmark_cli run --product examples/products/traffic_light.yaml --seed 0 --headless"]

@@ -1,0 +1,14 @@
+schema_version: 1
+parts:
+  brick_2x2:
+    geometry: primitive_duplo
+    size_m: [0.032, 0.032, 0.019]
+    studs: [2, 2]
+    mass_kg: 0.012
+    yaw_symmetry_deg: 90
+  brick_4x2:
+    geometry: primitive_duplo
+    size_m: [0.064, 0.032, 0.019]
+    studs: [4, 2]
+    mass_kg: 0.022
+    yaw_symmetry_deg: 180

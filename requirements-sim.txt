@@ -1,0 +1,4 @@
+# Python-only simulation dependencies. ROS packages are installed by
+# install_sim_system_deps.sh because ROS Python messages are not PyPI packages.
+mujoco>=3.2,<4
+trimesh>=4,<5

@@ -1,0 +1,13 @@
+.git
+.venv
+build
+install
+log
+runs
+dist
+FoundationPose
+O3P_API-*
+calibration_images
+real_robot_eval
+**/LEGO_Duplo_brick_2x2.stl
+**/LEGO_Duplo_brick_2x4.stl

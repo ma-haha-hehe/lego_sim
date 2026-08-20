@@ -1,0 +1,9 @@
+# Default tolerances and timeout for one benchmark episode.
+target_body: lego_figure_1
+lift_height_m: 0.05
+hold_time_s: 0.5
+max_episode_time_s: 300.0
+# Full assembly scoring tolerances.
+position_tolerance_xy_m: 0.006
+position_tolerance_z_m: 0.004
+yaw_tolerance_deg: 8.0
