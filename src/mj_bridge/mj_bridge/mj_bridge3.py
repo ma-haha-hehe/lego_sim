@@ -213,7 +213,7 @@ class MuJoCoActionServer(Node):
         self.get_logger().info("Starting MuJoCo action server")
 
         # ====================================================
-        
+
         # ====================================================
 
         # The public CLI has already generated an episode-specific scene.
@@ -225,14 +225,14 @@ class MuJoCoActionServer(Node):
         self.mj_lock = threading.RLock()
 
         # ====================================================
-        
+
         # ====================================================
 
         self.welded_pairs = set()
         self.fake_welds = []
 
         # ====================================================
-        
+
         # ====================================================
 
         self.arm_joint_names = [
@@ -270,7 +270,7 @@ class MuJoCoActionServer(Node):
             self.joint_qvel_addr[name] = self.model.jnt_dofadr[jid]
 
         # ====================================================
-        
+
         # ====================================================
 
         self.target_qpos = np.zeros(self.model.nq)
@@ -286,32 +286,32 @@ class MuJoCoActionServer(Node):
         self.cancel_requested = False
 
         # ====================================================
-        
+
         # ====================================================
 
-        
+
         self.gripper_target = GRIPPER_OPEN_VALUE
 
-        
+
         self.gripper_start_value = GRIPPER_OPEN_VALUE
 
-        
+
         self.gripper_goal_value = GRIPPER_OPEN_VALUE
 
-        
+
         self.gripper_start_time = 0.0
 
-        
+
         self.gripper_duration = 1.0
 
-        
+
         self.gripper_moving = False
 
         # open / close_hold
         self.gripper_mode = "open"
 
         # ====================================================
-        
+
         # ====================================================
 
         self.load_initial_positions()
@@ -320,7 +320,7 @@ class MuJoCoActionServer(Node):
             self.target_qpos[:] = self.data.qpos[:]
             self.target_qvel[:] = 0.0
 
-        
+
         self.episode_initial_qpos = self.data.qpos.copy()
         self.episode_initial_qvel = self.data.qvel.copy()
         self.benchmark_config = self.load_benchmark_config()
@@ -332,7 +332,7 @@ class MuJoCoActionServer(Node):
         self.reset_benchmark_state()
 
         # ====================================================
-        
+
         # ====================================================
 
         self.joint_state_pub = self.create_publisher(
@@ -652,7 +652,7 @@ class MuJoCoActionServer(Node):
         return response
 
     # =========================================================
-    
+
     # =========================================================
 
     def load_initial_positions(self):
@@ -681,7 +681,7 @@ class MuJoCoActionServer(Node):
                 self.data.qpos[qadr] = float(j_val)
                 self.target_qpos[qadr] = float(j_val)
 
-            
+
             for name in self.finger_joint_names:
                 if name in self.joint_qpos_addr:
                     qadr = self.joint_qpos_addr[name]
@@ -693,7 +693,7 @@ class MuJoCoActionServer(Node):
         self.get_logger().info("Loaded initial joint configuration")
 
     # =========================================================
-    
+
     # =========================================================
 
     def goal_callback(self, goal_request):
@@ -709,7 +709,7 @@ class MuJoCoActionServer(Node):
         return CancelResponse.ACCEPT
 
     # =========================================================
-    
+
     # =========================================================
 
     def handle_arm_accepted_callback(self, goal_handle):
@@ -791,7 +791,7 @@ class MuJoCoActionServer(Node):
         return FollowJointTrajectory.Result()
 
     # =========================================================
-    
+
     # =========================================================
 
     def execute_hand_callback(self, goal_handle):
@@ -822,7 +822,7 @@ class MuJoCoActionServer(Node):
             duration = 1.0
 
         with self.mj_lock:
-            
+
             self.gripper_start_value = self.gripper_target
             self.gripper_goal_value = cmd_val
             self.gripper_start_time = time.time()
@@ -842,8 +842,8 @@ class MuJoCoActionServer(Node):
                     f"{self.gripper_goal_value:.4f}, duration={duration:.2f}s"
                 )
 
-        
-        
+
+
         start_wait = time.time()
         timeout = duration + 3.0
 
@@ -888,7 +888,7 @@ class MuJoCoActionServer(Node):
                 self.gripper_moving = False
 
     # =========================================================
-    
+
     # =========================================================
 
     def update_action_state(self):
@@ -958,7 +958,7 @@ class MuJoCoActionServer(Node):
             self.target_qpos[qadr] = point.positions[i]
 
     # =========================================================
-    
+
     # =========================================================
 
     def step_pid(self):
@@ -979,7 +979,7 @@ class MuJoCoActionServer(Node):
                 qadr = self.model.jnt_qposadr[jid]
                 vadr = self.model.jnt_dofadr[jid]
 
-                
+
                 if actuator_name.startswith("actuator"):
                     error_p = self.target_qpos[qadr] - self.data.qpos[qadr]
                     error_v = -self.data.qvel[vadr]
@@ -989,7 +989,7 @@ class MuJoCoActionServer(Node):
 
                     self.data.ctrl[i] = torque
 
-                
+
                 elif actuator_name == "finger_actuator1":
                     self.data.ctrl[i] = self.gripper_target
 
@@ -1040,7 +1040,7 @@ class MuJoCoActionServer(Node):
         upper_hx, upper_hy, upper_hz = upper_half
         lower_hx, lower_hy, lower_hz = lower_half
 
-        
+
         if upper_pos[2] <= lower_pos[2]:
             return False
 
@@ -1067,7 +1067,7 @@ class MuJoCoActionServer(Node):
             return False
 
         return True
-    
+
     def snap_brick_to_base_plate(self, brick_name: str) -> bool:
         """Snap a brick to the nearest valid stud pose on the assembly plate."""
 
@@ -1096,40 +1096,40 @@ class MuJoCoActionServer(Node):
         pos = self.data.qpos[qadr:qadr + 3].copy()
         quat = self.data.qpos[qadr + 3:qadr + 7].copy()
 
-        
+
         dx = abs(pos[0] - ASSEMBLY_BASE_CENTER_X)
         dy = abs(pos[1] - ASSEMBLY_BASE_CENTER_Y)
 
         if dx > BASE_PLATE_HALF_X or dy > BASE_PLATE_HALF_Y:
             return False
 
-        
+
         brick_bottom_z = pos[2] - BRICK_BODY_HALF_HEIGHT
         vertical_gap = abs(brick_bottom_z - BASE_STUD_TOP_Z)
 
         if vertical_gap > BASE_SNAP_VERTICAL_TOL:
             return False
 
-        
+
         snapped_x, snapped_y = snap_xy_to_stud_grid(pos[0], pos[1])
 
-        
+
         yaw = yaw_from_quat_wxyz(quat)
         snapped_yaw = snap_yaw_to_90(yaw)
         snapped_quat = quat_wxyz_from_yaw(snapped_yaw)
 
-        
+
         self.data.qpos[qadr + 0] = snapped_x
         self.data.qpos[qadr + 1] = snapped_y
         self.data.qpos[qadr + 2] = BRICK_ON_BASE_CENTER_Z
         self.data.qpos[qadr + 3:qadr + 7] = snapped_quat
 
-        
+
         self.data.qvel[dofadr:dofadr + 6] = 0.0
 
         mujoco.mj_forward(self.model, self.data)
 
-        
+
         self.fake_welds.append(
             {
                 "parent": ASSEMBLY_BASE_NAME,
@@ -1156,7 +1156,7 @@ class MuJoCoActionServer(Node):
 
         return True
     # =========================================================
-    
+
     # =========================================================
 
     def auto_weld_touching_bricks(self):
@@ -1184,7 +1184,7 @@ class MuJoCoActionServer(Node):
                 if body1_name is None or body2_name is None:
                     continue
 
-                
+
                 if body1_name == ASSEMBLY_BASE_NAME and "brick" in body2_name:
                     self.snap_brick_to_base_plate(body2_name)
                     continue
@@ -1232,7 +1232,7 @@ class MuJoCoActionServer(Node):
                 if not self.should_weld_bottom_to_top(upper_name, lower_name):
                     continue
 
-                
+
                 self.create_fake_weld(lower_name, upper_name)
                 self.welded_pairs.add(pair)
 
@@ -1326,7 +1326,7 @@ class MuJoCoActionServer(Node):
                 mujoco.mj_forward(self.model, self.data)
 
     # =========================================================
-    
+
     # =========================================================
 
     def publish_joint_states(self):
@@ -1368,16 +1368,16 @@ def main():
             while rclpy.ok() and (viewer is None or viewer.is_running()):
                 loop_start = time.time()
 
-                
+
                 node.update_action_state()
 
-                
+
                 node.update_gripper_target()
 
                 for _ in range(SIM_SUBSTEPS):
                     node.step_pid()
 
-                    
+
                     if node.connection_mode == "snap":
                         node.auto_weld_touching_bricks()
                         node.maintain_fake_welds()
@@ -1425,4 +1425,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

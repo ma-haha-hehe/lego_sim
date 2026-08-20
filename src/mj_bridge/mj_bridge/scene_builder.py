@@ -279,17 +279,17 @@ def add_duplo_collision_geoms(body: ET.Element, brick_type: str) -> None:
     studs_x = spec["studs_x"]
     studs_y = spec["studs_y"]
 
-    
+
     geom_body = ET.SubElement(body, "geom")
     geom_body.set("type", "box")
 
-    
+
     geom_body.set(
         "size",
         f"{body_half[0]:.4f} {body_half[1]:.4f} {body_half[2]:.4f}",
     )
 
-    
+
     geom_body.set(
         "pos",
         f"0 0 {COLLISION_Z_OFFSET:.4f}",
@@ -297,7 +297,7 @@ def add_duplo_collision_geoms(body: ET.Element, brick_type: str) -> None:
 
     set_common_collision_params(geom_body, density=DENSITY)
 
-    
+
     start_x = -(studs_x - 1) * STUD_PITCH / 2.0
     start_y = -(studs_y - 1) * STUD_PITCH / 2.0
 
@@ -317,13 +317,13 @@ def add_duplo_collision_geoms(body: ET.Element, brick_type: str) -> None:
                 f"{STUD_RADIUS:.4f} {STUD_HALF_HEIGHT:.4f}",
             )
 
-            
+
             geom_stud.set(
                 "pos",
                 f"{x:.4f} {y:.4f} {stud_center_z + COLLISION_Z_OFFSET:.4f}",
             )
 
-            
+
             set_common_collision_params(geom_stud, density=30)
 
 
@@ -337,7 +337,7 @@ def create_assembly_base_plate() -> ET.Element:
         f"{ASSEMBLY_BASE_CENTER_X:.4f} {ASSEMBLY_BASE_CENTER_Y:.4f} {BASE_PLATE_CENTER_Z:.4f}",
     )
 
-    
+
     geom_base = ET.SubElement(body, "geom")
     geom_base.set("name", "assembly_base_plate_body")
     geom_base.set("type", "box")
@@ -409,7 +409,7 @@ def create_brick_body(block: dict, yaml_parts_center: np.ndarray) -> ET.Element:
     )
     body.set("quat", quat)
 
-    
+
     ET.SubElement(body, "freejoint")
 
     # ---------- visual mesh ----------
@@ -418,7 +418,7 @@ def create_brick_body(block: dict, yaml_parts_center: np.ndarray) -> ET.Element:
     geom_visual.set("mesh", mesh_name)
     geom_visual.set("rgba", rgba)
 
-    
+
     geom_visual.set("contype", VISUAL_CONTYPE)
     geom_visual.set("conaffinity", VISUAL_CONAFFINITY)
 
@@ -478,7 +478,7 @@ def create_lego_figure_body(spec: dict) -> ET.Element:
     body.set("quat", quat_from_yaw(yaw))
     ET.SubElement(body, "freejoint")
 
-    
+
     add_figure_geom(body, name=f"{name}_left_leg", geom_type="box",
                     size="0.0038 0.0040 0.0060", pos="-0.0043 0 0.0060",
                     rgba="0.12 0.22 0.75 1")
@@ -530,14 +530,14 @@ def build(
     root = tree.getroot()
     worldbody = get_worldbody(root)
 
-    
+
     find_and_remove_old_dynamic_bricks(worldbody)
 
     if ADD_ASSEMBLY_BASE_PLATE:
         base_plate = create_assembly_base_plate()
         worldbody.append(base_plate)
 
-    
+
     parts_plate = data.get("parts_plate", {})
     yaml_parts_center = np.array(
         parts_plate.get("center", [0.0, 0.0, 0.0]),
@@ -587,4 +587,3 @@ def build(
 
 if __name__ == "__main__":
     build()
-

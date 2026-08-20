@@ -161,5 +161,3 @@ LEGO is a trademark of the LEGO Group, which does not sponsor, authorize, or end
 ## Citation
 
 If this benchmark supports published work, cite the repository and the version or commit used for the experiments. A machine-readable entry is provided in [CITATION.cff](CITATION.cff).
-
-
