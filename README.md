@@ -149,8 +149,12 @@ src/mj_bridge/test/           Determinism, compatibility, and scoring tests
 
 ```bash
 source enter_sim_env.sh
-PYTHONPATH=src/mj_bridge python -m pytest -q src/mj_bridge/test
+python -m pytest -q src/mj_bridge/test/test_benchmark_core.py
 ```
+
+Do not replace `PYTHONPATH` after sourcing the environment script. ROS 2 adds its
+Python packages to that variable, and replacing it can hide packages such as
+`ament_flake8` and `ament_pep257` from the virtual environment.
 
 ## License and third-party material
 
