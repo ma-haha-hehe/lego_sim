@@ -9,7 +9,7 @@ import yaml
 from mj_bridge.benchmark_core import generate_episode, normalize_product, score_episode
 from mj_bridge.benchmark_cli import generate as generate_files
 from mj_bridge.executor_planner import plan_assembly
-from mj_bridge.mj_bridge3 import (
+from mj_bridge.grasp_geometry import (
     align_block_to_grasp_center, block_collision_center_world, grasp_center_world,
 )
 

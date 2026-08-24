@@ -23,6 +23,11 @@ from sensor_msgs.msg import CameraInfo, Image, JointState
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+from .grasp_geometry import (
+    COLLISION_Z_OFFSET, align_block_to_grasp_center,
+    block_collision_center_world, grasp_center_world,
+)
+
 BASE = os.path.dirname(__file__)
 sys.path.append(BASE)
 
@@ -64,43 +69,6 @@ def quat_multiply_wxyz(left: np.ndarray, right: np.ndarray) -> np.ndarray:
         lw * ry - lx * rz + ly * rw + lz * rx,
         lw * rz + lx * ry - ly * rx + lz * rw,
     ], dtype=float)
-
-
-def grasp_center_world(model, data) -> np.ndarray | None:
-    """Return the midpoint of the two primary fingertip contact pads."""
-    hand_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "hand")
-    left_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "left_finger")
-    right_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "right_finger")
-    if min(hand_id, left_id, right_id) < 0:
-        return None
-    finger_midpoint = (data.xpos[left_id] + data.xpos[right_id]) / 2.0
-    hand_rotation = data.xmat[hand_id].reshape(3, 3)
-    return finger_midpoint + hand_rotation @ np.array([0.0, 0.0, 0.0445])
-
-
-def block_collision_center_world(data, body_id: int) -> np.ndarray:
-    """Return the center of the main box collider for a benchmark block."""
-    rotation = data.xmat[body_id].reshape(3, 3)
-    return data.xpos[body_id] + rotation @ np.array([0.0, 0.0, COLLISION_Z_OFFSET])
-
-
-def align_block_to_grasp_center(model, data, body_id: int) -> float:
-    """Move a free block so its physical center lies between the finger pads."""
-    center = grasp_center_world(model, data)
-    if center is None:
-        return float("inf")
-    joint_id = model.body_jntadr[body_id]
-    if joint_id < 0:
-        return float("inf")
-    qadr = model.jnt_qposadr[joint_id]
-    dofadr = model.jnt_dofadr[joint_id]
-    old_center = block_collision_center_world(data, body_id).copy()
-    rotation = data.xmat[body_id].reshape(3, 3)
-    body_position = center - rotation @ np.array([0.0, 0.0, COLLISION_Z_OFFSET])
-    data.qpos[qadr:qadr + 3] = body_position
-    data.qvel[dofadr:dofadr + 6] = 0.0
-    mujoco.mj_forward(model, data)
-    return float(np.linalg.norm(old_center - center))
 
 
 def snap_yaw_to_90(yaw: float) -> float:
@@ -246,8 +214,6 @@ ASSEMBLY_BASE_CENTER_Y = 0.35
 STUD_PITCH = 0.016
 
 BRICK_BODY_HALF_HEIGHT = 0.0095
-COLLISION_Z_OFFSET = -0.009
-
 TABLE_TOP_Z = 0.04
 BASE_PLATE_THICKNESS = 0.006
 BASE_STUD_HEIGHT = 0.004
