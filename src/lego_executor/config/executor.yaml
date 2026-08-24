@@ -1,0 +1,18 @@
+oracle_moveit_executor:
+  ros__parameters:
+    auto_reset: true
+    wait_timeout_s: 30.0
+    planning_time_s: 10.0
+    planning_attempts: 3
+    velocity_scale: 0.35
+    acceleration_scale: 0.35
+    approach_height_m: 0.15
+    gripper_offset_m: 0.1234
+    grasp_descent_m: 0.165
+    place_descent_m: 0.15
+    cartesian_speed_scale: 0.12
+    lift_speed_scale: 0.35
+    gripper_open_m: 0.04
+    gripper_closed_m: 0.001
+    tool_yaw_offset_deg: 45.0
+    verify_lift_m: 0.025

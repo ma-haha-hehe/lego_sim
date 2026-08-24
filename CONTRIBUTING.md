@@ -4,8 +4,8 @@ Contributions should keep the benchmark deterministic and avoid changing an exis
 
 Before opening a pull request:
 
-1. Build the ROS package with `colcon build --packages-select mj_bridge`.
-2. Run `PYTHONPATH=src/mj_bridge python -m pytest -q src/mj_bridge/test`.
+1. Build both ROS packages with `colcon build --packages-select mj_bridge lego_executor --symlink-install`.
+2. Run `python -m pytest -q src/mj_bridge/test/test_benchmark_core.py` after sourcing `enter_sim_env.sh`.
 3. Validate any added product files with `lego-bench validate`.
 4. Document changes to schemas, physics, tolerances, observations, or metrics.
 5. Include provenance and redistribution terms for every new asset.

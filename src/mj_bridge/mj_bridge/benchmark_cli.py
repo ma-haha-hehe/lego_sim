@@ -13,6 +13,7 @@ from .benchmark_core import (
     score_episode, validate_product,
 )
 from .scene_builder import BASE_DIR, build
+from .executor_planner import plan_assembly
 
 
 def normalized_from_path(path: str) -> dict:
@@ -27,6 +28,7 @@ def generate(product_path: str, seed: int, output_dir: str) -> tuple[dict, Path]
     episode = generate_episode(product, seed=seed)
     product_out = output / "product.normalized.yaml"
     manifest = output / "episode_manifest.yaml"
+    execution_plan = output / "execution_plan.yaml"
     scene = output / "scene.xml"
     shutil.copy2(Path(BASE_DIR) / "panda.xml", output / "panda.xml")
     shutil.copy2(Path(BASE_DIR) / "hand.xml", output / "hand.xml")
@@ -36,6 +38,7 @@ def generate(product_path: str, seed: int, output_dir: str) -> tuple[dict, Path]
     )
     dump_yaml(product_out, product)
     dump_yaml(manifest, episode)
+    dump_yaml(execution_plan, plan_assembly(product))
     build(template_xml=str(Path(BASE_DIR) / "scene_template.xml"), output_xml=str(scene),
           episode_manifest=str(manifest))
     return episode, scene

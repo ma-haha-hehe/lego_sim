@@ -24,6 +24,7 @@ fi
   ros-humble-tf2-ros \
   ros-humble-rviz2 \
   ros-humble-xacro \
+  libyaml-cpp-dev \
   libgl1 \
   libglfw3
 
@@ -39,6 +40,6 @@ if [[ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]]; then
   "${SUDO[@]}" rosdep init
 fi
 rosdep update
-rosdep install --from-paths "${REPO_DIR}/src/mj_bridge" --ignore-src -r -y
+rosdep install --from-paths "${REPO_DIR}/src" --ignore-src -r -y
 
 echo "ROS and Python dependencies are installed. Next: source enter_sim_env.sh"

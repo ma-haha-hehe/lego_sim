@@ -23,12 +23,17 @@ if [[ -f "${_lego_repo}/install/mj_bridge/share/mj_bridge/package.bash" ]]; then
   source "${_lego_repo}/install/mj_bridge/share/mj_bridge/package.bash"
   export PATH="${_lego_repo}/install/mj_bridge/lib/mj_bridge:${PATH}"
 fi
+if [[ -f "${_lego_repo}/install/lego_executor/share/lego_executor/package.bash" ]]; then
+  source "${_lego_repo}/install/lego_executor/share/lego_executor/package.bash"
+  export PATH="${_lego_repo}/install/lego_executor/lib/lego_executor:${PATH}"
+fi
 cd "${_lego_repo}"
 echo "Panda + MuJoCo benchmark environment is ready"
 echo "Python: $(command -v python)"
-echo "Build: colcon build --packages-select mj_bridge --symlink-install"
+echo "Build: colcon build --packages-select mj_bridge lego_executor --symlink-install"
 echo "Test: python -m pytest -q src/mj_bridge/test/test_benchmark_core.py"
 echo "Validate: lego-bench validate examples/products/traffic_light.yaml"
 echo "Simulator only: ./run_panda_lego_sim.sh --headless"
-echo "MoveIt pipeline: ros2 launch mj_bridge lego_bench.launch.py headless:=true"
+echo "Reference pipeline: ./run_reference_pipeline.sh --headless"
+echo "Environment only: ros2 launch mj_bridge lego_bench.launch.py headless:=true executor:=none"
 unset _lego_repo

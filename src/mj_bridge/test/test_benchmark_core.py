@@ -1,6 +1,7 @@
 import math
 
 from mj_bridge.benchmark_core import generate_episode, normalize_product, score_episode
+from mj_bridge.executor_planner import plan_assembly
 
 
 def sample_product():
@@ -56,3 +57,29 @@ def test_one_degree_is_not_misread_as_one_radian():
         "name": "2x2_test", "pos": [0, 0, 0], "rotation": [0, 0, 1],
     }]})
     assert product["blocks"][0]["target"]["yaw_deg"] == 1.0
+
+
+def test_planner_orders_supports_before_upper_blocks():
+    product = normalize_product({"blocks": [
+        {"name": "top", "type": "brick_2x2", "pos": [0, 0, 0.0192]},
+        {"name": "base", "type": "brick_2x2", "pos": [0, 0, 0]},
+    ]})
+    plan = plan_assembly(product)
+    assert [step["id"] for step in plan["steps"]] == ["base", "top"]
+    assert plan["steps"][1]["depends_on"] == ["base"]
+
+
+def test_planner_keeps_stable_ids_for_identical_parts():
+    plan = plan_assembly(sample_product())
+    assert [step["id"] for step in plan["steps"]] == ["red_base", "blue_top"]
+
+
+def test_planner_records_multiple_direct_supports():
+    product = normalize_product({"schema_version": 1, "product": {"name": "bridge"}, "blocks": [
+        {"id": "left", "type": "brick_2x2", "target": {"position": [-0.016, 0, 0]}},
+        {"id": "right", "type": "brick_2x2", "target": {"position": [0.016, 0, 0]}},
+        {"id": "beam", "type": "brick_4x2", "target": {"position": [0, 0, 0.0192]}},
+    ]})
+    plan = plan_assembly(product)
+    assert plan["steps"][2]["id"] == "beam"
+    assert plan["steps"][2]["depends_on"] == ["left", "right"]

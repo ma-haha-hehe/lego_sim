@@ -13,6 +13,8 @@ The benchmark takes a product description in YAML, creates the required loose pa
 - Ground-truth and RGB-D observation modes
 - RGB, metric depth, instance segmentation, camera calibration, and TF
 - Explicit reset and result services for automated evaluation
+- Dependency-aware assembly planning with stable part IDs
+- Reference Panda/MoveIt pick-and-place state machine
 - Per-part pose errors, completion rate, runtime, timeout, collision, and stability metrics
 - Headless execution, batch generation, Docker configuration, and CI
 - Compatibility with product files used by the original project
@@ -28,7 +30,7 @@ git clone https://github.com/ma-haha-hehe/lego_sim.git
 cd lego_sim
 bash install_sim_system_deps.sh
 source enter_sim_env.sh
-colcon build --packages-select mj_bridge --symlink-install
+colcon build --packages-select mj_bridge lego_executor --symlink-install
 source enter_sim_env.sh
 ```
 
@@ -46,7 +48,19 @@ lego-bench generate \
   --output-dir runs/traffic-light-42
 ```
 
-Start the complete Panda and MoveIt pipeline:
+Run the complete reference pipeline (episode generation, MuJoCo, MoveIt,
+planning, execution, and result export):
+
+```bash
+./run_reference_pipeline.sh --headless
+```
+
+Remove `--headless` to open MuJoCo and RViz. The traffic-light example takes
+about one minute on a typical workstation. The launch remains open after the
+executor finishes so the final scene can be inspected; press `Ctrl+C` to stop it.
+Results are written under `runs/reference-seed-42/`.
+
+To start the environment without the reference executor:
 
 ```bash
 ros2 launch mj_bridge lego_bench.launch.py \
@@ -54,10 +68,12 @@ ros2 launch mj_bridge lego_bench.launch.py \
   seed:=42 \
   headless:=false \
   observation:=oracle \
-  connection_mode:=snap
+  connection_mode:=snap \
+  executor:=none
 ```
 
-For a headless RGB-D episode, set `headless:=true` and `observation:=rgbd`.
+This mode is intended for an external policy. For a headless RGB-D episode,
+set `headless:=true` and `observation:=rgbd`.
 
 ## Product format
 
@@ -78,7 +94,7 @@ blocks:
 
 Target positions are expressed in metres relative to the center of the assembly plate. Yaw is expressed in degrees. Part IDs must be unique.
 
-Version 0.1 provides `brick_2x2` and `brick_4x2`. A product may contain any number and arrangement of registered parts that fit in the configured source and assembly workspaces. See [Product format](docs/product-format.md) for the schema, coordinate conventions, and legacy conversion rules.
+Version 0.2 provides `brick_2x2` and `brick_4x2`. A product may contain any number and arrangement of registered parts that fit in the configured source and assembly workspaces. See [Product format](docs/product-format.md) for the schema, coordinate conventions, and legacy conversion rules.
 
 ## ROS 2 interface
 
@@ -101,11 +117,35 @@ The full launch also provides MoveIt actions and services, including `/move_acti
 
 An integration skeleton is available in [examples/external_executor.py](examples/external_executor.py).
 
+## Reference executor
+
+Episode generation writes `execution_plan.yaml`. The planner infers direct
+support relationships from target geometry, orders lower layers before upper
+layers, retains stable YAML IDs, and records the original 90-degree-first grasp
+accessibility preference. The C++ executor then runs this state machine for each
+part:
+
+```text
+pregrasp -> descend -> close -> lift and verify -> preplace -> descend -> open -> retreat
+```
+
+The reference executor consumes only the public benchmark topics, actions, and
+services. It is a baseline and an executable integration example, not a required
+part of an evaluation method. Replace `executor:=oracle` with `executor:=none`
+and run your own ROS 2 node to test another task planner, perception system,
+grasp generator, controller, or complete policy. See
+[Executor integration](docs/executor-integration.md).
+
 ## Evaluation modes
 
 `observation:=oracle` publishes exact MuJoCo poses and is intended for planning and control experiments. `observation:=rgbd` enables image-based evaluation.
 
-`connection_mode:=snap` uses the benchmark's documented stud-alignment model. `connection_mode:=physics` disables automatic engagement. Results should only be compared when product, seed, observation mode, connection mode, tolerances, and simulator version are identical.
+`connection_mode:=snap` uses deterministic grasp attachment and documented
+target-aware stud alignment. This isolates sequencing and motion-planning
+experiments from contact-model variance. `connection_mode:=physics` disables
+these constraints and leaves grasping and engagement to MuJoCo contacts.
+Results should only be compared when product, seed, observation mode,
+connection mode, tolerances, and simulator version are identical.
 
 Query and save a result with:
 
@@ -143,6 +183,7 @@ docs/                         Format, architecture, and integration notes
 src/mj_bridge/launch/         Complete ROS 2 launch file
 src/mj_bridge/mj_bridge/      Simulator bridge, generator, schema, and assets
 src/mj_bridge/test/           Determinism, compatibility, and scoring tests
+src/lego_executor/            Reference planner adapter and MoveIt executor
 ```
 
 ## Testing
@@ -150,6 +191,7 @@ src/mj_bridge/test/           Determinism, compatibility, and scoring tests
 ```bash
 source enter_sim_env.sh
 python -m pytest -q src/mj_bridge/test/test_benchmark_core.py
+colcon test --packages-select mj_bridge lego_executor
 ```
 
 Do not replace `PYTHONPATH` after sourcing the environment script. ROS 2 adds its

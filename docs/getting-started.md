@@ -2,7 +2,7 @@
 
 ## Benchmark responsibilities
 
-The benchmark owns product validation, episode generation, MuJoCo physics, Panda control endpoints, observations, reset semantics, and scoring. It does not prescribe a detector, grasp generator, task planner, or motion planner.
+The benchmark owns product validation, episode generation, MuJoCo physics, Panda control endpoints, observations, reset semantics, and scoring. The included executor is a reference implementation; external methods may replace its detector, grasp generator, task planner, motion planner, or complete policy.
 
 Every run follows the same sequence:
 
@@ -18,11 +18,22 @@ Every run follows the same sequence:
 ```bash
 bash install_sim_system_deps.sh
 source enter_sim_env.sh
-colcon build --packages-select mj_bridge --symlink-install
+colcon build --packages-select mj_bridge lego_executor --symlink-install
 source enter_sim_env.sh
 ```
 
 ## Running an episode
+
+Run the supplied reference executor:
+
+```bash
+./run_reference_pipeline.sh --headless
+```
+
+The script accepts `--product`, `--seed`, `--output-dir`, `--observation`, and
+`--connection-mode`. It expects the workspace to have been built first.
+
+Start an episode for an external method:
 
 ```bash
 ros2 launch mj_bridge lego_bench.launch.py \
@@ -31,7 +42,8 @@ ros2 launch mj_bridge lego_bench.launch.py \
   output_dir:=$PWD/runs/traffic-light-0 \
   headless:=true \
   observation:=oracle \
-  connection_mode:=snap
+  connection_mode:=snap \
+  executor:=none
 ```
 
 The launch starts `robot_state_publisher`, the static world and camera transforms, MoveIt `move_group`, and the MuJoCo bridge.
@@ -42,6 +54,7 @@ The output directory contains:
 
 - `product.normalized.yaml`: canonical schema-v1 product
 - `episode_manifest.yaml`: seed, source poses, target poses, and body mapping
+- `execution_plan.yaml`: stable-ID, dependency-aware reference assembly order
 - `scene.xml`: generated MuJoCo scene
 - `actual_state.json`: authoritative state at result time
 - `result.json`: aggregate and per-part metrics

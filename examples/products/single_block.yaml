@@ -1,0 +1,8 @@
+schema_version: 1
+product:
+  name: single_block
+blocks:
+  - id: blue_block
+    type: brick_2x2
+    color: blue
+    target: {position: [0.0, 0.0, 0.0], yaw_deg: 0}

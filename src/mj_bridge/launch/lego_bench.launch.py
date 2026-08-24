@@ -19,6 +19,7 @@ def launch_setup(context):
     headless = LaunchConfiguration("headless")
     observation = LaunchConfiguration("observation").perform(context)
     connection_mode = LaunchConfiguration("connection_mode").perform(context)
+    executor_mode = LaunchConfiguration("executor").perform(context)
     _, scene = generate(product, seed, output_dir)
 
     moveit_config = (
@@ -64,6 +65,7 @@ def launch_setup(context):
             "moveit_manage_controllers": False,
             "trajectory_execution.allowed_execution_duration_scaling": 3.0,
             "trajectory_execution.allowed_goal_duration_margin": 5.0,
+            "trajectory_execution.allowed_start_tolerance": 0.05,
         }],
     )
     rsp = Node(
@@ -92,7 +94,18 @@ def launch_setup(context):
         package="rviz2", executable="rviz2", output="log", arguments=["-d", rviz_config],
         parameters=[moveit_config.to_dict()], condition=UnlessCondition(headless),
     )
-    return [static_tf, camera_tf, rsp, move_group, bridge, rviz]
+    nodes = [static_tf, camera_tf, rsp, move_group, bridge, rviz]
+    if executor_mode == "oracle":
+        executor_config = os.path.join(
+            get_package_share_directory("lego_executor"), "config", "executor.yaml"
+        )
+        nodes.append(Node(
+            package="lego_executor", executable="oracle_moveit_executor", output="screen",
+            parameters=[moveit_config.to_dict(), executor_config, {
+                "plan_file": str(Path(output_dir).resolve() / "execution_plan.yaml"),
+            }],
+        ))
+    return nodes
 
 
 def generate_launch_description():
@@ -104,5 +117,6 @@ def generate_launch_description():
         DeclareLaunchArgument("headless", default_value="false"),
         DeclareLaunchArgument("observation", default_value="oracle"),
         DeclareLaunchArgument("connection_mode", default_value="snap"),
+        DeclareLaunchArgument("executor", default_value="none"),
         OpaqueFunction(function=launch_setup),
     ])

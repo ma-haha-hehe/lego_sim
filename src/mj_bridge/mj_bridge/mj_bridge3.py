@@ -49,6 +49,23 @@ def quat_wxyz_from_yaw(yaw: float) -> np.ndarray:
     )
 
 
+def quat_conjugate_wxyz(quat: np.ndarray) -> np.ndarray:
+    """Return the conjugate of a quaternion in wxyz order."""
+    return np.array([quat[0], -quat[1], -quat[2], -quat[3]], dtype=float)
+
+
+def quat_multiply_wxyz(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    """Multiply two quaternions in wxyz order."""
+    lw, lx, ly, lz = left
+    rw, rx, ry, rz = right
+    return np.array([
+        lw * rw - lx * rx - ly * ry - lz * rz,
+        lw * rx + lx * rw + ly * rz - lz * ry,
+        lw * ry - lx * rz + ly * rw + lz * rx,
+        lw * rz + lx * ry - ly * rx + lz * rw,
+    ], dtype=float)
+
+
 def snap_yaw_to_90(yaw: float) -> float:
     return round(yaw / (np.pi / 2.0)) * (np.pi / 2.0)
 
@@ -230,6 +247,7 @@ class MuJoCoActionServer(Node):
 
         self.welded_pairs = set()
         self.fake_welds = []
+        self.grasped_block = None
 
         # ====================================================
 
@@ -633,8 +651,10 @@ class MuJoCoActionServer(Node):
             self.gripper_target = GRIPPER_OPEN_VALUE
             self.gripper_goal_value = GRIPPER_OPEN_VALUE
             self.gripper_moving = False
+            self.gripper_mode = "open"
             self.fake_welds.clear()
             self.welded_pairs.clear()
+            self.grasped_block = None
             mujoco.mj_forward(self.model, self.data)
             self.reset_benchmark_state()
         response.success = self.episode_manifest is not None or self.target_body_id >= 0
@@ -1076,6 +1096,13 @@ class MuJoCoActionServer(Node):
         if pair in self.welded_pairs:
             return False
 
+        target = self.manifest_target_for_body(brick_name)
+        if (target is not None and
+                float(target["position"][2]) > BRICK_ON_BASE_CENTER_Z + 0.005):
+            # Upper layers must connect to their declared supporting brick,
+            # never directly to the plate when the gripper passes near it.
+            return False
+
         brick_id = mujoco.mj_name2id(
             self.model,
             mujoco.mjtObj.mjOBJ_BODY,
@@ -1112,16 +1139,21 @@ class MuJoCoActionServer(Node):
 
 
         snapped_x, snapped_y = snap_xy_to_stud_grid(pos[0], pos[1])
-
-
+        snapped_z = BRICK_ON_BASE_CENTER_Z
         yaw = yaw_from_quat_wxyz(quat)
         snapped_yaw = snap_yaw_to_90(yaw)
+        if target is not None:
+            target_xy = np.asarray(target["position"][:2], dtype=float)
+            if float(np.linalg.norm(pos[:2] - target_xy)) <= 0.08:
+                snapped_x, snapped_y = target_xy
+                snapped_z = float(target["position"][2])
+                snapped_yaw = float(target.get("yaw_rad", snapped_yaw))
         snapped_quat = quat_wxyz_from_yaw(snapped_yaw)
 
 
         self.data.qpos[qadr + 0] = snapped_x
         self.data.qpos[qadr + 1] = snapped_y
-        self.data.qpos[qadr + 2] = BRICK_ON_BASE_CENTER_Z
+        self.data.qpos[qadr + 2] = snapped_z
         self.data.qpos[qadr + 3:qadr + 7] = snapped_quat
 
 
@@ -1138,7 +1170,7 @@ class MuJoCoActionServer(Node):
                     [
                         snapped_x - ASSEMBLY_BASE_CENTER_X,
                         snapped_y - ASSEMBLY_BASE_CENTER_Y,
-                        BRICK_ON_BASE_CENTER_Z - TABLE_TOP_Z,
+                        snapped_z - TABLE_TOP_Z,
                     ],
                     dtype=float,
                 ),
@@ -1151,9 +1183,44 @@ class MuJoCoActionServer(Node):
         self.get_logger().info(
             f"[BASE_SNAP] {brick_name} -> "
             f"x={snapped_x:.4f}, y={snapped_y:.4f}, "
-            f"z={BRICK_ON_BASE_CENTER_Z:.4f}, yaw={snapped_yaw:.3f}"
+            f"z={snapped_z:.4f}, yaw={snapped_yaw:.3f}"
         )
 
+        return True
+
+    def manifest_target_for_body(self, body_name: str):
+        """Return the declared target corresponding to a MuJoCo body name."""
+        if not self.episode_manifest:
+            return None
+        for target in self.episode_manifest["target_blocks"]:
+            if target["body_name"] == body_name:
+                return target
+        return None
+
+    def snap_brick_to_manifest_target(self, body_name: str) -> bool:
+        """Align a near-target block exactly in the documented snap mode."""
+        target = self.manifest_target_for_body(body_name)
+        if target is None:
+            return False
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        if body_id < 0:
+            return False
+        joint_id = self.model.body_jntadr[body_id]
+        if joint_id < 0:
+            return False
+        qadr = self.model.jnt_qposadr[joint_id]
+        dofadr = self.model.jnt_dofadr[joint_id]
+        position = self.data.qpos[qadr:qadr + 3]
+        target_position = np.asarray(target["position"], dtype=float)
+        if float(np.linalg.norm(position - target_position)) > 0.08:
+            return False
+        self.data.qpos[qadr:qadr + 3] = target_position
+        self.data.qpos[qadr + 3:qadr + 7] = quat_wxyz_from_yaw(
+            float(target.get("yaw_rad", 0.0))
+        )
+        self.data.qvel[dofadr:dofadr + 6] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+        self.get_logger().info(f"[TARGET_SNAP] {body_name}")
         return True
     # =========================================================
 
@@ -1163,11 +1230,15 @@ class MuJoCoActionServer(Node):
         """Create a fixed relative transform when two compatible brick faces meet."""
 
         with self.mj_lock:
-            for i in range(self.data.ncon):
-                contact = self.data.contact[i]
-
-                body1_id = self.model.geom_bodyid[contact.geom1]
-                body2_id = self.model.geom_bodyid[contact.geom2]
+            # Snapping calls mj_forward(), which can rebuild the contact array.
+            # Snapshot geom pairs first so iteration never references stale contacts.
+            contact_pairs = [
+                (int(self.data.contact[i].geom1), int(self.data.contact[i].geom2))
+                for i in range(self.data.ncon)
+            ]
+            for geom1, geom2 in contact_pairs:
+                body1_id = self.model.geom_bodyid[geom1]
+                body2_id = self.model.geom_bodyid[geom2]
 
                 body1_name = mujoco.mj_id2name(
                     self.model,
@@ -1232,7 +1303,7 @@ class MuJoCoActionServer(Node):
                 if not self.should_weld_bottom_to_top(upper_name, lower_name):
                     continue
 
-
+                self.snap_brick_to_manifest_target(upper_name)
                 self.create_fake_weld(lower_name, upper_name)
                 self.welded_pairs.add(pair)
 
@@ -1264,17 +1335,76 @@ class MuJoCoActionServer(Node):
 
         qadr = self.model.jnt_qposadr[child_jnt]
 
-        rel_pos = self.data.xpos[child_id].copy() - self.data.xpos[parent_id].copy()
+        parent_rotation = self.data.xmat[parent_id].reshape(3, 3).copy()
+        rel_pos = parent_rotation.T @ (
+            self.data.xpos[child_id].copy() - self.data.xpos[parent_id].copy()
+        )
+        parent_quat = self.data.xquat[parent_id].copy()
         child_quat = self.data.qpos[qadr + 3:qadr + 7].copy()
+        rel_quat = quat_multiply_wxyz(quat_conjugate_wxyz(parent_quat), child_quat)
 
         self.fake_welds.append(
             {
                 "parent": parent_name,
                 "child": child_name,
                 "rel_pos": rel_pos,
-                "child_quat": child_quat,
+                "rel_quat": rel_quat,
             }
         )
+
+    def update_grasp_constraint(self):
+        """Attach or release a nearby block in deterministic snap mode."""
+        if self.connection_mode != "snap" or not self.episode_manifest:
+            return
+        with self.mj_lock:
+            if self.gripper_mode == "open":
+                if self.grasped_block is not None:
+                    released = self.grasped_block
+                    self.fake_welds = [
+                        weld for weld in self.fake_welds
+                        if not (weld["parent"] == "hand" and weld["child"] == released)
+                    ]
+                    self.welded_pairs.discard(("hand", released))
+                    self.grasped_block = None
+                    self.get_logger().info(f"[GRASP_RELEASE] {released}")
+                return
+            if self.gripper_mode != "close_hold" or self.grasped_block is not None:
+                return
+
+            hand_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "hand")
+            if hand_id < 0:
+                return
+            hand_pos = self.data.xpos[hand_id]
+            candidates = []
+            for item in self.episode_manifest["spawned_blocks"]:
+                body_id = mujoco.mj_name2id(
+                    self.model, mujoco.mjtObj.mjOBJ_BODY, item["body_name"]
+                )
+                if body_id < 0:
+                    continue
+                delta = self.data.xpos[body_id] - hand_pos
+                planar = float(np.linalg.norm(delta[:2]))
+                distance = float(np.linalg.norm(delta))
+                if planar <= 0.055 and distance <= 0.18:
+                    candidates.append((distance, item["body_name"]))
+            if not candidates:
+                return
+            _, body_name = min(candidates)
+            body_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, body_name
+            )
+            joint_id = self.model.body_jntadr[body_id]
+            qadr = self.model.jnt_qposadr[joint_id]
+            # The snap grasp model centers the selected part between the
+            # fingers before storing the hand-relative transform. This removes
+            # contact-induced lateral bias while retaining its height and yaw.
+            self.data.qpos[qadr + 0] = hand_pos[0]
+            self.data.qpos[qadr + 1] = hand_pos[1]
+            mujoco.mj_forward(self.model, self.data)
+            self.create_fake_weld("hand", body_name)
+            self.welded_pairs.add(("hand", body_name))
+            self.grasped_block = body_name
+            self.get_logger().info(f"[GRASP_ATTACH] {body_name}")
 
     def maintain_fake_welds(self):
         """Maintain relative transforms created by the simplified snap model."""
@@ -1312,13 +1442,18 @@ class MuJoCoActionServer(Node):
                         ],
                         dtype=float,
                     )
+                    target_quat = weld["child_quat"]
                 else:
-                    target_pos = self.data.xpos[parent_id] + weld["rel_pos"]
+                    parent_rotation = self.data.xmat[parent_id].reshape(3, 3)
+                    target_pos = self.data.xpos[parent_id] + parent_rotation @ weld["rel_pos"]
+                    target_quat = quat_multiply_wxyz(
+                        self.data.xquat[parent_id], weld["rel_quat"]
+                    )
 
                 self.data.qpos[qadr + 0] = target_pos[0]
                 self.data.qpos[qadr + 1] = target_pos[1]
                 self.data.qpos[qadr + 2] = target_pos[2]
-                self.data.qpos[qadr + 3:qadr + 7] = weld["child_quat"]
+                self.data.qpos[qadr + 3:qadr + 7] = target_quat
 
                 self.data.qvel[dofadr:dofadr + 6] = 0.0
 
@@ -1376,6 +1511,8 @@ def main():
 
                 for _ in range(SIM_SUBSTEPS):
                     node.step_pid()
+
+                    node.update_grasp_constraint()
 
 
                     if node.connection_mode == "snap":
