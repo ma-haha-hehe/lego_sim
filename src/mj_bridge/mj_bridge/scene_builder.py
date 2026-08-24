@@ -87,8 +87,11 @@ FRICTION = "5.0 0.2 0.02"
 
 
 
-SOLREF = "0.004 1"
-SOLIMP = "0.90 0.98 0.002"
+# A two-timestep contact time constant and near-rigid impedance keep lightweight
+# parts on the support surface when a position-controlled arm presses on them.
+# Softer values allow visibly large penetration before producing enough force.
+SOLREF = "0.002 1"
+SOLIMP = "0.995 0.9999 0.0001"
 
 
 

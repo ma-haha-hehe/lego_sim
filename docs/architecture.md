@@ -31,6 +31,10 @@ The product and seed determine the generated source poses. The episode manifest 
 
 The `physics` model leaves all grasps and assembly contacts to MuJoCo. The `snap` model adds deterministic gripper attachment after closing, then aligns a released part with its declared target and direct support layer inside a fixed capture region. The model is deliberately explicit because it is part of the experimental condition.
 
+Table, plate, and part contacts use a two-timestep time constant with near-rigid
+impedance. A regression test applies a gradually increasing 10 N downward load
+and limits support-surface penetration to 0.5 mm.
+
 ## Scoring
 
 Parts are matched by stable ID rather than nearest-neighbor assignment. XY, Z, and symmetry-aware yaw errors are evaluated independently. An assembly succeeds only when every required part is within tolerance. The live and exported result also reports completion, elapsed time, timeout, robot-environment contact events, and part stability violations.

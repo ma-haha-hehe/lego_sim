@@ -22,7 +22,7 @@
             contype="1"
             conaffinity="1"
             friction="3 0.1 0.01"
-            solref="0.001 1"
+            solref="0.002 1"
             solimp="0.999 0.9999 0.0001"
             density="10000"
             />
@@ -34,8 +34,8 @@
           size="0.192 0.192 0.003"
           rgba="0.15 0.15 0.15 1"
           friction="5.0 0.2 0.02"
-          solref="0.004 1"
-          solimp="0.90 0.98 0.002"/>
+          solref="0.002 1"
+          solimp="0.995 0.9999 0.0001"/>
       </body>
 
   </worldbody>
