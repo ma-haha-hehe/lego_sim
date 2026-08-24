@@ -97,7 +97,7 @@ public:
     declare_parameter("cartesian_speed_scale", 0.12);
     declare_parameter("lift_speed_scale", 0.35);
     declare_parameter("gripper_open_m", 0.04);
-    declare_parameter("gripper_closed_m", 0.001);
+    declare_parameter("gripper_closed_m", 0.0155);
     declare_parameter("tool_yaw_offset_deg", 45.0);
     declare_parameter("verify_lift_m", 0.025);
 

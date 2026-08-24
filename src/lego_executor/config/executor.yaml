@@ -13,6 +13,6 @@ oracle_moveit_executor:
     cartesian_speed_scale: 0.12
     lift_speed_scale: 0.35
     gripper_open_m: 0.04
-    gripper_closed_m: 0.001
+    gripper_closed_m: 0.0155
     tool_yaw_offset_deg: 45.0
     verify_lift_m: 0.025

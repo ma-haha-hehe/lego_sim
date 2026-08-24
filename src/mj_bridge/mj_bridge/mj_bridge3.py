@@ -66,6 +66,43 @@ def quat_multiply_wxyz(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     ], dtype=float)
 
 
+def grasp_center_world(model, data) -> np.ndarray | None:
+    """Return the midpoint of the two primary fingertip contact pads."""
+    hand_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "hand")
+    left_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "left_finger")
+    right_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "right_finger")
+    if min(hand_id, left_id, right_id) < 0:
+        return None
+    finger_midpoint = (data.xpos[left_id] + data.xpos[right_id]) / 2.0
+    hand_rotation = data.xmat[hand_id].reshape(3, 3)
+    return finger_midpoint + hand_rotation @ np.array([0.0, 0.0, 0.0445])
+
+
+def block_collision_center_world(data, body_id: int) -> np.ndarray:
+    """Return the center of the main box collider for a benchmark block."""
+    rotation = data.xmat[body_id].reshape(3, 3)
+    return data.xpos[body_id] + rotation @ np.array([0.0, 0.0, COLLISION_Z_OFFSET])
+
+
+def align_block_to_grasp_center(model, data, body_id: int) -> float:
+    """Move a free block so its physical center lies between the finger pads."""
+    center = grasp_center_world(model, data)
+    if center is None:
+        return float("inf")
+    joint_id = model.body_jntadr[body_id]
+    if joint_id < 0:
+        return float("inf")
+    qadr = model.jnt_qposadr[joint_id]
+    dofadr = model.jnt_dofadr[joint_id]
+    old_center = block_collision_center_world(data, body_id).copy()
+    rotation = data.xmat[body_id].reshape(3, 3)
+    body_position = center - rotation @ np.array([0.0, 0.0, COLLISION_Z_OFFSET])
+    data.qpos[qadr:qadr + 3] = body_position
+    data.qvel[dofadr:dofadr + 6] = 0.0
+    mujoco.mj_forward(model, data)
+    return float(np.linalg.norm(old_center - center))
+
+
 def snap_yaw_to_90(yaw: float) -> float:
     return round(yaw / (np.pi / 2.0)) * (np.pi / 2.0)
 
@@ -1371,10 +1408,9 @@ class MuJoCoActionServer(Node):
             if self.gripper_mode != "close_hold" or self.grasped_block is not None:
                 return
 
-            hand_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "hand")
-            if hand_id < 0:
+            grasp_center = grasp_center_world(self.model, self.data)
+            if grasp_center is None:
                 return
-            hand_pos = self.data.xpos[hand_id]
             candidates = []
             for item in self.episode_manifest["spawned_blocks"]:
                 body_id = mujoco.mj_name2id(
@@ -1382,10 +1418,11 @@ class MuJoCoActionServer(Node):
                 )
                 if body_id < 0:
                     continue
-                delta = self.data.xpos[body_id] - hand_pos
+                delta = block_collision_center_world(self.data, body_id) - grasp_center
                 planar = float(np.linalg.norm(delta[:2]))
+                vertical = abs(float(delta[2]))
                 distance = float(np.linalg.norm(delta))
-                if planar <= 0.055 and distance <= 0.18:
+                if planar <= 0.04 and vertical <= 0.06:
                     candidates.append((distance, item["body_name"]))
             if not candidates:
                 return
@@ -1393,18 +1430,15 @@ class MuJoCoActionServer(Node):
             body_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_BODY, body_name
             )
-            joint_id = self.model.body_jntadr[body_id]
-            qadr = self.model.jnt_qposadr[joint_id]
-            # The snap grasp model centers the selected part between the
-            # fingers before storing the hand-relative transform. This removes
-            # contact-induced lateral bias while retaining its height and yaw.
-            self.data.qpos[qadr + 0] = hand_pos[0]
-            self.data.qpos[qadr + 1] = hand_pos[1]
-            mujoco.mj_forward(self.model, self.data)
+            correction = align_block_to_grasp_center(
+                self.model, self.data, body_id
+            )
             self.create_fake_weld("hand", body_name)
             self.welded_pairs.add(("hand", body_name))
             self.grasped_block = body_name
-            self.get_logger().info(f"[GRASP_ATTACH] {body_name}")
+            self.get_logger().info(
+                f"[GRASP_ATTACH] {body_name}, pose_correction={correction:.4f}m"
+            )
 
     def maintain_fake_welds(self):
         """Maintain relative transforms created by the simplified snap model."""

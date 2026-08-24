@@ -3,11 +3,15 @@ import tempfile
 from pathlib import Path
 
 import mujoco
+import numpy as np
 import yaml
 
 from mj_bridge.benchmark_core import generate_episode, normalize_product, score_episode
 from mj_bridge.benchmark_cli import generate as generate_files
 from mj_bridge.executor_planner import plan_assembly
+from mj_bridge.mj_bridge3 import (
+    align_block_to_grasp_center, block_collision_center_world, grasp_center_world,
+)
 
 
 def sample_product():
@@ -113,3 +117,25 @@ def test_table_contact_resists_robot_scale_downward_force():
             collision_bottom = float(data.xpos[body_id, 2]) - 0.009 - 0.0095
             minimum_collision_bottom = min(minimum_collision_bottom, collision_bottom)
         assert minimum_collision_bottom >= 0.0395
+
+
+def test_snap_grasp_aligns_visual_and_collision_center_between_fingers():
+    product = normalize_product({"blocks": [
+        {"name": "test_block", "type": "brick_2x2", "pos": [0, 0, 0]},
+    ]})
+    with tempfile.TemporaryDirectory() as directory:
+        directory = Path(directory)
+        product_file = directory / "product.yaml"
+        product_file.write_text(yaml.safe_dump(product), encoding="utf-8")
+        episode, scene = generate_files(str(product_file), 6, str(directory / "run"))
+        model = mujoco.MjModel.from_xml_path(str(scene))
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+        body_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_BODY, episode["spawned_blocks"][0]["body_name"]
+        )
+        correction = align_block_to_grasp_center(model, data, body_id)
+        assert np.isfinite(correction)
+        assert np.linalg.norm(
+            block_collision_center_world(data, body_id) - grasp_center_world(model, data)
+        ) < 1e-9

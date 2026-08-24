@@ -6,6 +6,7 @@
 - Added a reference Panda/MoveIt executor with an explicit pick-and-place state machine.
 - Added deterministic snap-mode grasping and target-aware layer engagement.
 - Hardened table and part contacts to prevent visible surface penetration under arm load.
+- Aligned snap-grasp visual and collision geometry with the physical fingertip center.
 - Added a single-command reference pipeline and documented external executor integration.
 - Extended the container, dependency installer, and CI checks for the executor package.
 
