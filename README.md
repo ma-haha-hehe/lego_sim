@@ -143,6 +143,11 @@ Approach, lift, carried-part alignment, placement, and retreat are Cartesian
 paths. A lift does not begin until the simulator reports sustained contact on
 both fingertips with the requested part.
 
+Overhead transfers try MoveIt planning first. If all planning attempts fail,
+the reference executor falls back to a direct Cartesian point-to-point motion
+with collision checking disabled. Vertical approach and retreat segments always
+use direct Cartesian motion and do not invoke the OMPL planner.
+
 The reference executor consumes only the public benchmark topics, actions, and
 services. It is a baseline and an executable integration example, not a required
 part of an evaluation method. Replace `executor:=oracle` with `executor:=none`

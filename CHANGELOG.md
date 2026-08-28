@@ -12,6 +12,7 @@
 - Matched the real-robot pick/place sequence with Cartesian descent, lift, placement alignment, and retreat segments.
 - Added model-based arm feed-forward, endpoint convergence checks, and a tool-down constraint for stable real-time visualization.
 - Added balanced headlight, key, and fill lighting for clearer workspace visibility.
+- Added a direct Cartesian fallback when overhead MoveIt planning cannot find a path.
 - Added a single-command reference pipeline and documented external executor integration.
 - Extended the container, dependency installer, and CI checks for the executor package.
 

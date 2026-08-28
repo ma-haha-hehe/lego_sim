@@ -94,8 +94,8 @@ public:
     declare_parameter("acceleration_scale", 0.35);
     declare_parameter("approach_height_m", 0.15);
     declare_parameter("gripper_offset_m", 0.1234);
-    declare_parameter("grasp_descent_m", 0.165);
-    declare_parameter("place_descent_m", 0.15);
+    declare_parameter("grasp_descent_m", 0.170);
+    declare_parameter("place_descent_m", 0.155);
     declare_parameter("cartesian_speed_scale", 0.12);
     declare_parameter("lift_speed_scale", 0.35);
     declare_parameter("gripper_open_m", 0.04);
@@ -281,6 +281,12 @@ private:
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_client_;
 };
 
+bool move_linear_to_pose(
+  ExecutorNode & node,
+  moveit::planning_interface::MoveGroupInterface & arm,
+  const geometry_msgs::msg::Pose & target,
+  double speed_scale);
+
 bool move_to_pose(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
@@ -319,7 +325,12 @@ bool move_to_pose(
   }
   arm.clearPoseTargets();
   arm.clearPathConstraints();
-  return false;
+  RCLCPP_WARN(
+    node.get_logger(),
+    "%s MoveIt planning failed; trying a direct Cartesian fallback without collision checking",
+    label.c_str());
+  return move_linear_to_pose(
+    node, arm, pose, node.get_parameter("cartesian_speed_scale").as_double());
 }
 
 bool move_linear_to_pose(
