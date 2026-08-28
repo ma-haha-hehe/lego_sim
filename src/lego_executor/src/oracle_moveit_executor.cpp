@@ -5,6 +5,8 @@
 #include <moveit/robot_trajectory/robot_trajectory.h>
 #include <moveit/trajectory_processing/time_optimal_trajectory_generation.h>
 #include <moveit_msgs/msg/collision_object.hpp>
+#include <moveit_msgs/msg/constraints.hpp>
+#include <moveit_msgs/msg/orientation_constraint.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <shape_msgs/msg/solid_primitive.hpp>
@@ -98,7 +100,7 @@ public:
     declare_parameter("lift_speed_scale", 0.35);
     declare_parameter("gripper_open_m", 0.04);
     declare_parameter("gripper_closed_m", 0.014);
-    declare_parameter("grasp_confirmation_timeout_s", 2.0);
+    declare_parameter("grasp_confirmation_timeout_s", 5.0);
     declare_parameter("tool_yaw_offset_deg", 45.0);
     declare_parameter("verify_lift_m", 0.025);
 
@@ -283,14 +285,29 @@ bool move_to_pose(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
   const geometry_msgs::msg::Pose & pose,
-  const std::string & label)
+  const std::string & label,
+  bool keep_tool_down = false)
 {
+  if (keep_tool_down) {
+    moveit_msgs::msg::OrientationConstraint orientation;
+    orientation.header.frame_id = arm.getPlanningFrame();
+    orientation.link_name = arm.getEndEffectorLink();
+    orientation.orientation = pose.orientation;
+    orientation.absolute_x_axis_tolerance = 0.45;
+    orientation.absolute_y_axis_tolerance = 0.45;
+    orientation.absolute_z_axis_tolerance = M_PI;
+    orientation.weight = 1.0;
+    moveit_msgs::msg::Constraints constraints;
+    constraints.orientation_constraints.push_back(orientation);
+    arm.setPathConstraints(constraints);
+  }
   const int attempts = node.get_parameter("planning_attempts").as_int();
   for (int attempt = 1; attempt <= attempts; ++attempt) {
     arm.setStartStateToCurrentState();
     arm.setPoseTarget(pose);
     if (arm.move() == moveit::core::MoveItErrorCode::SUCCESS) {
       arm.clearPoseTargets();
+      arm.clearPathConstraints();
       // Let the bridge publish the converged joint state before deriving the
       // next Cartesian trajectory. This avoids a stale start state after a
       // long point-to-point motion.
@@ -301,6 +318,7 @@ bool move_to_pose(
       node.get_logger(), "%s planning attempt %d/%d failed", label.c_str(), attempt, attempts);
   }
   arm.clearPoseTargets();
+  arm.clearPathConstraints();
   return false;
 }
 
@@ -432,7 +450,7 @@ bool execute_task(
   geometry_msgs::msg::Pose preplace = task.target;
   preplace.position.z += gripper_offset + approach;
   RCLCPP_INFO(node.get_logger(), "[%s] MOVE_TO_PREPLACE", task.id.c_str());
-  if (!move_to_pose(node, arm, preplace, "preplace")) {
+  if (!move_to_pose(node, arm, preplace, "preplace", true)) {
     return false;
   }
   const BlockState carried = node.block(task.id);

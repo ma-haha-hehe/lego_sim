@@ -163,6 +163,8 @@ RUN_DIR = os.environ.get("LEGO_BENCH_RUN_DIR", "")
 
 SIM_SUBSTEPS = 5
 LOOP_DT = 0.016
+GRASP_CONTACT_HOLD_S = 0.05
+ARM_GOAL_TOLERANCE_RAD = 0.010
 
 
 # ============================================================
@@ -322,6 +324,7 @@ class MuJoCoActionServer(Node):
         self.gripper_mode = "open"
         self.grasp_contact_body = None
         self.grasp_contact_since = None
+        self._last_grasp_wait_log = 0.0
 
         # ====================================================
 
@@ -481,6 +484,7 @@ class MuJoCoActionServer(Node):
         self._unstable_blocks = set()
         self.grasp_contact_body = None
         self.grasp_contact_since = None
+        self._last_grasp_wait_log = 0.0
         if self.episode_manifest:
             self.target_body_id = -1
             self.episode_start_time = time.monotonic()
@@ -952,7 +956,19 @@ class MuJoCoActionServer(Node):
 
             if t_rel >= self.traj_duration:
                 self.set_target_direct_locked(points[-1])
-                self.is_executing = False
+                final_point = points[-1]
+                errors = []
+                for index, name in enumerate(self.active_joint_names):
+                    if (name not in self.joint_qpos_addr or
+                            index >= len(final_point.positions)):
+                        continue
+                    qadr = self.joint_qpos_addr[name]
+                    errors.append(abs(
+                        float(final_point.positions[index]) -
+                        float(self.data.qpos[qadr])
+                    ))
+                if not errors or max(errors) <= ARM_GOAL_TOLERANCE_RAD:
+                    self.is_executing = False
                 return
 
             idx = 0
@@ -1011,6 +1027,15 @@ class MuJoCoActionServer(Node):
     def step_pid(self):
         with self.mj_lock:
             self.data.ctrl[:] = 0.0
+            self.data.qfrc_applied[:] = 0.0
+
+            # The hardware Panda controller supplies model-based gravity and
+            # Coriolis feed-forward. Apply the MuJoCo equivalent only to the
+            # seven arm joints; free-moving benchmark parts remain physical.
+            for name in self.arm_joint_names:
+                if name in self.joint_qvel_addr:
+                    vadr = self.joint_qvel_addr[name]
+                    self.data.qfrc_applied[vadr] = self.data.qfrc_bias[vadr]
 
             for i in range(self.model.nu):
                 actuator_name = mujoco.mj_id2name(
@@ -1480,13 +1505,15 @@ class MuJoCoActionServer(Node):
                     self.get_logger().info(f"[GRASP_RELEASE] {released}")
                     self.settle_released_block(released)
                 return
-            if self.gripper_mode != "close_hold" or self.grasped_block is not None:
+            if (self.gripper_mode not in {"closing", "close_hold"} or
+                    self.grasped_block is not None):
                 return
 
             grasp_center = grasp_center_world(self.model, self.data)
             if grasp_center is None:
                 return
             candidates = []
+            observed = []
             for item in self.episode_manifest["spawned_blocks"]:
                 body_id = mujoco.mj_name2id(
                     self.model, mujoco.mjtObj.mjOBJ_BODY, item["body_name"]
@@ -1501,12 +1528,34 @@ class MuJoCoActionServer(Node):
                     item["body_name"]
                 )
                 upright_z = float(self.data.xmat[body_id][8])
-                if (left_contact and right_contact and distance <= 0.015 and
-                        planar <= 0.012 and vertical <= 0.012 and upright_z >= 0.7):
+                observed.append((
+                    distance, item["body_name"], planar, vertical,
+                    left_contact, right_contact,
+                ))
+                if (left_contact and right_contact and distance <= 0.020 and
+                        planar <= 0.012 and vertical <= 0.018 and upright_z >= 0.7):
                     candidates.append((distance, item["body_name"]))
             if not candidates:
                 self.grasp_contact_body = None
                 self.grasp_contact_since = None
+                now = time.monotonic()
+                if (self.gripper_mode == "close_hold" and observed and
+                        now - self._last_grasp_wait_log >= 1.0):
+                    distance, body_name, planar, vertical, left, right = min(observed)
+                    finger_positions = [
+                        float(self.data.qpos[self.joint_qpos_addr[name]])
+                        for name in self.finger_joint_names
+                    ]
+                    self.get_logger().info(
+                        f"[GRASP_WAIT] nearest={body_name}, "
+                        f"left_contact={str(left).lower()}, "
+                        f"right_contact={str(right).lower()}, "
+                        f"distance={distance:.4f}m, planar={planar:.4f}m, "
+                        f"vertical={vertical:.4f}m, "
+                        f"fingers=({finger_positions[0]:.4f}, "
+                        f"{finger_positions[1]:.4f})m"
+                    )
+                    self._last_grasp_wait_log = now
                 return
             _, body_name = min(candidates)
             now = time.monotonic()
@@ -1514,7 +1563,8 @@ class MuJoCoActionServer(Node):
                 self.grasp_contact_body = body_name
                 self.grasp_contact_since = now
                 return
-            if self.grasp_contact_since is None or now - self.grasp_contact_since < 0.10:
+            if (self.grasp_contact_since is None or
+                    now - self.grasp_contact_since < GRASP_CONTACT_HOLD_S):
                 return
             body_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_BODY, body_name
