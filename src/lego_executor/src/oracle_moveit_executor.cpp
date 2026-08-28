@@ -409,6 +409,21 @@ bool execute_task(
   if (!move_to_pose(node, arm, preplace, "preplace")) {
     return false;
   }
+  const BlockState carried = node.block(task.id);
+  geometry_msgs::msg::Pose corrected = arm.getCurrentPose().pose;
+  const double correction_x = task.target.position.x - carried.pose.position.x;
+  const double correction_y = task.target.position.y - carried.pose.position.y;
+  const double correction_z =
+    task.target.position.z + place_descent - carried.pose.position.z;
+  corrected.position.x += correction_x;
+  corrected.position.y += correction_y;
+  corrected.position.z += correction_z;
+  RCLCPP_INFO(
+    node.get_logger(), "[%s] ALIGN_CARRIED_BLOCK delta=(%.4f, %.4f, %.4f)m",
+    task.id.c_str(), correction_x, correction_y, correction_z);
+  if (!move_to_pose(node, arm, corrected, "carried-block alignment")) {
+    return false;
+  }
   RCLCPP_INFO(node.get_logger(), "[%s] DESCEND_TO_TARGET", task.id.c_str());
   if (!move_linear(node, arm, -place_descent, cartesian_speed)) {
     return false;

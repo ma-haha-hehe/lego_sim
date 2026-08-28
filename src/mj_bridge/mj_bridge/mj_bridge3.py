@@ -853,13 +853,13 @@ class MuJoCoActionServer(Node):
             self.gripper_moving = True
 
             if cmd_val >= 0.03:
-                self.gripper_mode = "open"
+                self.gripper_mode = "opening"
                 self.get_logger().info(
                     f"Opening gripper smoothly: {self.gripper_start_value:.4f} -> "
                     f"{self.gripper_goal_value:.4f}, duration={duration:.2f}s"
                 )
             else:
-                self.gripper_mode = "close_hold"
+                self.gripper_mode = "closing"
                 self.get_logger().info(
                     f"Closing gripper smoothly: {self.gripper_start_value:.4f} -> "
                     f"{self.gripper_goal_value:.4f}, duration={duration:.2f}s"
@@ -909,6 +909,12 @@ class MuJoCoActionServer(Node):
             if alpha >= 1.0:
                 self.gripper_target = self.gripper_goal_value
                 self.gripper_moving = False
+                if self.gripper_goal_value >= 0.03:
+                    self.gripper_mode = "open"
+                    self.get_logger().info("Gripper opening completed")
+                else:
+                    self.gripper_mode = "close_hold"
+                    self.get_logger().info("Gripper closing completed")
 
     # =========================================================
 
@@ -1200,7 +1206,9 @@ class MuJoCoActionServer(Node):
                 return target
         return None
 
-    def snap_brick_to_manifest_target(self, body_name: str) -> bool:
+    def snap_brick_to_manifest_target(
+            self, body_name: str, max_distance: float = 0.08,
+            max_planar_distance: float | None = None) -> bool:
         """Align a near-target block exactly in the documented snap mode."""
         target = self.manifest_target_for_body(body_name)
         if target is None:
@@ -1215,7 +1223,11 @@ class MuJoCoActionServer(Node):
         dofadr = self.model.jnt_dofadr[joint_id]
         position = self.data.qpos[qadr:qadr + 3]
         target_position = np.asarray(target["position"], dtype=float)
-        if float(np.linalg.norm(position - target_position)) > 0.08:
+        correction = float(np.linalg.norm(position - target_position))
+        planar_correction = float(np.linalg.norm(position[:2] - target_position[:2]))
+        if (correction > max_distance or
+                (max_planar_distance is not None and
+                 planar_correction > max_planar_distance)):
             return False
         self.data.qpos[qadr:qadr + 3] = target_position
         self.data.qpos[qadr + 3:qadr + 7] = quat_wxyz_from_yaw(
@@ -1223,7 +1235,9 @@ class MuJoCoActionServer(Node):
         )
         self.data.qvel[dofadr:dofadr + 6] = 0.0
         mujoco.mj_forward(self.model, self.data)
-        self.get_logger().info(f"[TARGET_SNAP] {body_name}")
+        self.get_logger().info(
+            f"[TARGET_SNAP] {body_name}, pose_correction={correction:.4f}m"
+        )
         return True
     # =========================================================
 
@@ -1260,10 +1274,14 @@ class MuJoCoActionServer(Node):
 
 
                 if body1_name == ASSEMBLY_BASE_NAME and "brick" in body2_name:
+                    if body2_name == self.grasped_block:
+                        continue
                     self.snap_brick_to_base_plate(body2_name)
                     continue
 
                 if body2_name == ASSEMBLY_BASE_NAME and "brick" in body1_name:
+                    if body1_name == self.grasped_block:
+                        continue
                     self.snap_brick_to_base_plate(body1_name)
                     continue
 
@@ -1302,6 +1320,9 @@ class MuJoCoActionServer(Node):
                 else:
                     upper_name = body2_name
                     lower_name = body1_name
+
+                if upper_name == self.grasped_block:
+                    continue
 
                 if not self.should_weld_bottom_to_top(upper_name, lower_name):
                     continue
@@ -1355,6 +1376,54 @@ class MuJoCoActionServer(Node):
             }
         )
 
+    def settle_released_block(self, body_name: str) -> bool:
+        """Transfer a released block from the hand to its intended support."""
+        target = self.manifest_target_for_body(body_name)
+        if target is None:
+            return False
+        body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, body_name
+        )
+        joint_id = self.model.body_jntadr[body_id] if body_id >= 0 else -1
+        if joint_id < 0:
+            return False
+        qadr = self.model.jnt_qposadr[joint_id]
+        position = self.data.qpos[qadr:qadr + 3].copy()
+        target_position = np.asarray(target["position"], dtype=float)
+        delta = position - target_position
+        self.get_logger().info(
+            f"[RELEASE_HANDOFF] {body_name}, "
+            f"delta=({delta[0]:.4f}, {delta[1]:.4f}, {delta[2]:.4f})m"
+        )
+        if not self.snap_brick_to_manifest_target(
+                body_name, max_distance=0.20, max_planar_distance=0.08):
+            return False
+
+        if float(target["position"][2]) <= BRICK_ON_BASE_CENTER_Z + 0.005:
+            return self.snap_brick_to_base_plate(body_name)
+
+        candidates = []
+        for lower in self.episode_manifest["target_blocks"]:
+            lower_name = lower["body_name"]
+            if lower_name == body_name:
+                continue
+            if not any(weld["child"] == lower_name for weld in self.fake_welds):
+                continue
+            if self.should_weld_bottom_to_top(body_name, lower_name):
+                candidates.append((float(lower["position"][2]), lower_name))
+
+        if not candidates:
+            return False
+
+        _, lower_name = max(candidates)
+        pair = tuple(sorted([body_name, lower_name]))
+        self.create_fake_weld(lower_name, body_name)
+        self.welded_pairs.add(pair)
+        self.get_logger().info(
+            f"[RELEASE_SNAP] lower={lower_name}, upper={body_name}"
+        )
+        return True
+
     def update_grasp_constraint(self):
         """Attach or release a nearby block in deterministic snap mode."""
         if self.connection_mode != "snap" or not self.episode_manifest:
@@ -1370,6 +1439,7 @@ class MuJoCoActionServer(Node):
                     self.welded_pairs.discard(("hand", released))
                     self.grasped_block = None
                     self.get_logger().info(f"[GRASP_RELEASE] {released}")
+                    self.settle_released_block(released)
                 return
             if self.gripper_mode != "close_hold" or self.grasped_block is not None:
                 return
