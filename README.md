@@ -126,8 +126,22 @@ accessibility preference. The C++ executor then runs this state machine for each
 part:
 
 ```text
-pregrasp -> descend -> close -> lift and verify -> preplace -> descend -> open -> retreat
+move above source
+  -> open gripper
+  -> descend vertically
+  -> close gripper and confirm dual-fingertip contact
+  -> lift vertically back to the source approach height
+  -> move above target
+  -> align the carried part with a Cartesian segment
+  -> descend vertically
+  -> open gripper
+  -> retreat vertically
 ```
+
+Only the source-to-target overhead transfers use general motion planning.
+Approach, lift, carried-part alignment, placement, and retreat are Cartesian
+paths. A lift does not begin until the simulator reports sustained contact on
+both fingertips with the requested part.
 
 The reference executor consumes only the public benchmark topics, actions, and
 services. It is a baseline and an executable integration example, not a required

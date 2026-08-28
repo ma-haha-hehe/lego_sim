@@ -24,8 +24,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from .grasp_geometry import (
-    COLLISION_Z_OFFSET, align_block_to_grasp_center,
-    block_collision_center_world, grasp_center_world,
+    COLLISION_Z_OFFSET, block_collision_center_world, grasp_center_world,
 )
 
 BASE = os.path.dirname(__file__)
@@ -156,15 +155,6 @@ BENCHMARK_CONFIG_PATH = os.environ.get(
 )
 EPISODE_MANIFEST_PATH = os.environ.get("LEGO_BENCH_MANIFEST", "")
 RUN_DIR = os.environ.get("LEGO_BENCH_RUN_DIR", "")
-
-
-# ============================================================
-
-# ============================================================
-
-KP = 1500.0
-KD = 120.0
-MAX_TORQUE = 150.0
 
 
 # ============================================================
@@ -330,6 +320,8 @@ class MuJoCoActionServer(Node):
 
         # open / close_hold
         self.gripper_mode = "open"
+        self.grasp_contact_body = None
+        self.grasp_contact_since = None
 
         # ====================================================
 
@@ -487,6 +479,8 @@ class MuJoCoActionServer(Node):
         self.stability_violations = 0
         self._active_safety_contacts = set()
         self._unstable_blocks = set()
+        self.grasp_contact_body = None
+        self.grasp_contact_since = None
         if self.episode_manifest:
             self.target_body_id = -1
             self.episode_start_time = time.monotonic()
@@ -573,7 +567,22 @@ class MuJoCoActionServer(Node):
                 upright = float(self.data.xmat[body_id][8]) >= 0.7
                 if z < 0.025 or not (-0.75 <= x <= 0.75 and -0.75 <= y <= 0.75) or not upright:
                     unstable.add(item["id"])
-            self.stability_violations += len(unstable - self._unstable_blocks)
+            new_violations = unstable - self._unstable_blocks
+            self.stability_violations += len(new_violations)
+            for block_id in sorted(new_violations):
+                item = next(
+                    block for block in self.episode_manifest["spawned_blocks"]
+                    if block["id"] == block_id
+                )
+                body_id = mujoco.mj_name2id(
+                    self.model, mujoco.mjtObj.mjOBJ_BODY, item["body_name"]
+                )
+                x, y, z = (float(value) for value in self.data.xpos[body_id])
+                upright_z = float(self.data.xmat[body_id][8])
+                self.get_logger().warn(
+                    f"[STABILITY_VIOLATION] {block_id}, "
+                    f"position=({x:.4f}, {y:.4f}, {z:.4f}), upright_z={upright_z:.4f}"
+                )
             self._unstable_blocks = unstable
 
     def update_benchmark_state(self):
@@ -610,6 +619,7 @@ class MuJoCoActionServer(Node):
         blocks = {}
         if not self.episode_manifest:
             return {"blocks": blocks}
+        grasped_id = None
         for item in self.episode_manifest["spawned_blocks"]:
             body_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_BODY, item["body_name"]
@@ -624,7 +634,13 @@ class MuJoCoActionServer(Node):
                 "quaternion_wxyz": [float(v) for v in self.data.xquat[body_id]],
                 "yaw_rad": float(yaw_from_quat_wxyz(self.data.xquat[body_id])),
             }
-        return {"episode_id": self.episode_manifest["episode_id"], "blocks": blocks}
+            if item["body_name"] == self.grasped_block:
+                grasped_id = item["id"]
+        return {
+            "episode_id": self.episode_manifest["episode_id"],
+            "grasped_block": grasped_id,
+            "blocks": blocks,
+        }
 
     def publish_public_state(self, result=None):
         state = self.current_block_state()
@@ -658,6 +674,8 @@ class MuJoCoActionServer(Node):
             self.fake_welds.clear()
             self.welded_pairs.clear()
             self.grasped_block = None
+            self.grasp_contact_body = None
+            self.grasp_contact_since = None
             mujoco.mj_forward(self.model, self.data)
             self.reset_benchmark_state()
         response.success = self.episode_manifest is not None or self.target_body_id >= 0
@@ -1006,17 +1024,11 @@ class MuJoCoActionServer(Node):
 
                 jid = self.model.actuator_trnid[i, 0]
                 qadr = self.model.jnt_qposadr[jid]
-                vadr = self.model.jnt_dofadr[jid]
-
-
                 if actuator_name.startswith("actuator"):
-                    error_p = self.target_qpos[qadr] - self.data.qpos[qadr]
-                    error_v = -self.data.qvel[vadr]
-
-                    torque = KP * error_p + KD * error_v
-                    torque = np.clip(torque, -MAX_TORQUE, MAX_TORQUE)
-
-                    self.data.ctrl[i] = torque
+                    # Panda arm actuators are position servos in panda.xml.
+                    # Supplying a torque here makes MuJoCo interpret it as an
+                    # out-of-range joint target and causes visible oscillation.
+                    self.data.ctrl[i] = self.target_qpos[qadr]
 
 
                 elif actuator_name == "finger_actuator1":
@@ -1424,12 +1436,39 @@ class MuJoCoActionServer(Node):
         )
         return True
 
+    def finger_contacts_for_block(self, body_name: str) -> tuple[bool, bool]:
+        """Report whether both physical fingertips contact a block."""
+        block_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, body_name
+        )
+        left_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "left_finger"
+        )
+        right_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "right_finger"
+        )
+        if min(block_id, left_id, right_id) < 0:
+            return False, False
+
+        touching = set()
+        for index in range(self.data.ncon):
+            contact = self.data.contact[index]
+            body1 = int(self.model.geom_bodyid[contact.geom1])
+            body2 = int(self.model.geom_bodyid[contact.geom2])
+            if body1 == block_id:
+                touching.add(body2)
+            elif body2 == block_id:
+                touching.add(body1)
+        return left_id in touching, right_id in touching
+
     def update_grasp_constraint(self):
-        """Attach or release a nearby block in deterministic snap mode."""
+        """Attach a contact-verified block or release it in snap mode."""
         if self.connection_mode != "snap" or not self.episode_manifest:
             return
         with self.mj_lock:
             if self.gripper_mode == "open":
+                self.grasp_contact_body = None
+                self.grasp_contact_since = None
                 if self.grasped_block is not None:
                     released = self.grasped_block
                     self.fake_welds = [
@@ -1458,22 +1497,38 @@ class MuJoCoActionServer(Node):
                 planar = float(np.linalg.norm(delta[:2]))
                 vertical = abs(float(delta[2]))
                 distance = float(np.linalg.norm(delta))
-                if planar <= 0.04 and vertical <= 0.06:
+                left_contact, right_contact = self.finger_contacts_for_block(
+                    item["body_name"]
+                )
+                upright_z = float(self.data.xmat[body_id][8])
+                if (left_contact and right_contact and distance <= 0.015 and
+                        planar <= 0.012 and vertical <= 0.012 and upright_z >= 0.7):
                     candidates.append((distance, item["body_name"]))
             if not candidates:
+                self.grasp_contact_body = None
+                self.grasp_contact_since = None
                 return
             _, body_name = min(candidates)
+            now = time.monotonic()
+            if self.grasp_contact_body != body_name:
+                self.grasp_contact_body = body_name
+                self.grasp_contact_since = now
+                return
+            if self.grasp_contact_since is None or now - self.grasp_contact_since < 0.10:
+                return
             body_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_BODY, body_name
             )
-            correction = align_block_to_grasp_center(
-                self.model, self.data, body_id
-            )
+            correction = float(np.linalg.norm(
+                block_collision_center_world(self.data, body_id) - grasp_center
+            ))
             self.create_fake_weld("hand", body_name)
             self.welded_pairs.add(("hand", body_name))
             self.grasped_block = body_name
+            contact_time = now - self.grasp_contact_since
             self.get_logger().info(
-                f"[GRASP_ATTACH] {body_name}, pose_correction={correction:.4f}m"
+                f"[GRASP_ATTACH] {body_name}, dual_finger_contact=true, "
+                f"contact_time={contact_time:.3f}s, center_error={correction:.4f}m"
             )
 
     def maintain_fake_welds(self):

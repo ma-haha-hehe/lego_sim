@@ -8,6 +8,8 @@
 - Hardened table and part contacts to prevent visible surface penetration under arm load.
 - Aligned snap-grasp visual and collision geometry with the physical fingertip center.
 - Delayed snap attachment and release until gripper motion completes, added closed-loop pre-placement alignment, and made hand-to-support transfers atomic.
+- Corrected Panda actuator commands and required dual-fingertip contact before grasp attachment.
+- Matched the real-robot pick/place sequence with Cartesian descent, lift, placement alignment, and retreat segments.
 - Added a single-command reference pipeline and documented external executor integration.
 - Extended the container, dependency installer, and CI checks for the executor package.
 

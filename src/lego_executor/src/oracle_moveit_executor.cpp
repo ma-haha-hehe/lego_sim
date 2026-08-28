@@ -97,7 +97,8 @@ public:
     declare_parameter("cartesian_speed_scale", 0.12);
     declare_parameter("lift_speed_scale", 0.35);
     declare_parameter("gripper_open_m", 0.04);
-    declare_parameter("gripper_closed_m", 0.0155);
+    declare_parameter("gripper_closed_m", 0.014);
+    declare_parameter("grasp_confirmation_timeout_s", 2.0);
     declare_parameter("tool_yaw_offset_deg", 45.0);
     declare_parameter("verify_lift_m", 0.025);
 
@@ -218,6 +219,17 @@ public:
     return block;
   }
 
+  bool wait_for_grasp(const std::string & id)
+  {
+    const auto timeout = std::chrono::duration<double>(
+      get_parameter("grasp_confirmation_timeout_s").as_double());
+    std::unique_lock<std::mutex> lock(data_mutex_);
+    return data_cv_.wait_for(lock, timeout, [this, &id]() {
+      const YAML::Node grasped = state_["grasped_block"];
+      return grasped && grasped.as<std::string>("") == id;
+    });
+  }
+
   bool command_gripper(double position)
   {
     if (!gripper_client_->wait_for_action_server(10s)) {
@@ -292,15 +304,13 @@ bool move_to_pose(
   return false;
 }
 
-bool move_linear(
+bool move_linear_to_pose(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
-  double z_delta,
+  const geometry_msgs::msg::Pose & target,
   double speed_scale)
 {
-  geometry_msgs::msg::Pose target = arm.getCurrentPose().pose;
   arm.setStartStateToCurrentState();
-  target.position.z += z_delta;
   moveit_msgs::msg::RobotTrajectory trajectory_message;
   const double fraction = arm.computeCartesianPath({target}, 0.005, 0.0, trajectory_message, false);
   if (fraction < 0.98) {
@@ -316,6 +326,17 @@ bool move_linear(
   }
   trajectory.getRobotTrajectoryMsg(trajectory_message);
   return arm.execute(trajectory_message) == moveit::core::MoveItErrorCode::SUCCESS;
+}
+
+bool move_linear(
+  ExecutorNode & node,
+  moveit::planning_interface::MoveGroupInterface & arm,
+  double z_delta,
+  double speed_scale)
+{
+  geometry_msgs::msg::Pose target = arm.getCurrentPose().pose;
+  target.position.z += z_delta;
+  return move_linear_to_pose(node, arm, target, speed_scale);
 }
 
 void add_table(moveit::planning_interface::PlanningSceneInterface & scene, const std::string & frame)
@@ -387,13 +408,18 @@ bool execute_task(
   if (!node.command_gripper(node.get_parameter("gripper_closed_m").as_double())) {
     return false;
   }
-  std::this_thread::sleep_for(500ms);
+  if (!node.wait_for_grasp(task.id)) {
+    RCLCPP_ERROR(
+      node.get_logger(), "[%s] dual-fingertip grasp was not confirmed", task.id.c_str());
+    return false;
+  }
+  RCLCPP_INFO(node.get_logger(), "[%s] GRASP_CONFIRMED", task.id.c_str());
 
   add_block(scene, arm.getPlanningFrame(), task.id, task.type, source.pose);
   arm.attachObject(
     task.id, "panda_hand", {"panda_hand", "panda_leftfinger", "panda_rightfinger", "panda_link8"});
   RCLCPP_INFO(node.get_logger(), "[%s] LIFT", task.id.c_str());
-  if (!move_linear(node, arm, approach, lift_speed)) {
+  if (!move_linear(node, arm, grasp_descent, lift_speed)) {
     return false;
   }
   std::this_thread::sleep_for(500ms);
@@ -421,7 +447,7 @@ bool execute_task(
   RCLCPP_INFO(
     node.get_logger(), "[%s] ALIGN_CARRIED_BLOCK delta=(%.4f, %.4f, %.4f)m",
     task.id.c_str(), correction_x, correction_y, correction_z);
-  if (!move_to_pose(node, arm, corrected, "carried-block alignment")) {
+  if (!move_linear_to_pose(node, arm, corrected, cartesian_speed)) {
     return false;
   }
   RCLCPP_INFO(node.get_logger(), "[%s] DESCEND_TO_TARGET", task.id.c_str());
