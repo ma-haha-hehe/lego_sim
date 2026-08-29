@@ -20,6 +20,7 @@ except ImportError:  # Allow `python scene_builder.py` during local development.
 # ============================================================
 
 BASE_DIR = os.path.dirname(__file__)
+PART_REGISTRY = load_benchmark_yaml(os.path.join(BASE_DIR, "part_registry.yaml"))["parts"]
 
 INITIAL_YAML = os.path.join(BASE_DIR, "initial.yaml")
 SCENE_TEMPLATE_XML = os.path.join(BASE_DIR, "scene_template.xml")
@@ -157,12 +158,14 @@ BRICK_SPECS = {
         "studs_x": 2,
         "studs_y": 2,
         "body_half_size": np.array([0.016, 0.016, BRICK_BODY_HALF_HEIGHT], dtype=float),
+        "mass_kg": float(PART_REGISTRY["brick_2x2"]["mass_kg"]),
     },
     "brick_4x2": {
         "mesh": "lego_2x4",
         "studs_x": 4,
         "studs_y": 2,
         "body_half_size": np.array([0.032, 0.016, BRICK_BODY_HALF_HEIGHT], dtype=float),
+        "mass_kg": float(PART_REGISTRY["brick_4x2"]["mass_kg"]),
     },
 }
 
@@ -271,7 +274,7 @@ def set_common_collision_params(geom: ET.Element, density: float | None = None) 
 
 
 def add_duplo_collision_geoms(body: ET.Element, brick_type: str) -> None:
-    """Add a box body and cylindrical studs for a supported brick type."""
+    """Add a hollow brick shell and cylindrical studs."""
 
     if brick_type not in BRICK_SPECS:
         raise ValueError(f"Unsupported brick type: {brick_type}")
@@ -282,23 +285,60 @@ def add_duplo_collision_geoms(body: ET.Element, brick_type: str) -> None:
     studs_x = spec["studs_x"]
     studs_y = spec["studs_y"]
 
+    # Use the measured part mass from the public registry instead of deriving
+    # mass from the deliberately simplified collision primitives.  A box
+    # approximation is sufficient for the principal inertia of these small,
+    # nearly symmetric parts and keeps the centre of mass aligned with the
+    # collision body.
+    mass = float(spec["mass_kg"])
+    full_size = 2.0 * body_half
+    inertia = mass / 12.0 * np.array([
+        full_size[1] ** 2 + full_size[2] ** 2,
+        full_size[0] ** 2 + full_size[2] ** 2,
+        full_size[0] ** 2 + full_size[1] ** 2,
+    ])
+    ET.SubElement(body, "inertial", {
+        "pos": f"0 0 {COLLISION_Z_OFFSET:.4f}",
+        "mass": f"{mass:.6f}",
+        "diaginertia": " ".join(f"{value:.10g}" for value in inertia),
+    })
 
-    geom_body = ET.SubElement(body, "geom")
-    geom_body.set("type", "box")
 
+    # A solid box makes every upper brick rest on top of the studs and adds
+    # roughly 4 mm to each layer.  Four perimeter walls and a top plate leave
+    # the underside open, so studs can enter the cavity as they do on a real
+    # brick.  The explicit inertial above owns the mass calculation.
+    wall_thickness = 0.0025
+    top_thickness = 0.0025
 
-    geom_body.set(
-        "size",
-        f"{body_half[0]:.4f} {body_half[1]:.4f} {body_half[2]:.4f}",
+    def add_shell_box(size, pos):
+        geom = ET.SubElement(body, "geom", {"type": "box"})
+        geom.set("size", " ".join(f"{value:.4f}" for value in size))
+        geom.set("pos", " ".join(f"{value:.4f}" for value in pos))
+        set_common_collision_params(geom)
+
+    add_shell_box(
+        [wall_thickness / 2.0, body_half[1], body_half[2]],
+        [body_half[0] - wall_thickness / 2.0, 0.0, COLLISION_Z_OFFSET],
     )
-
-
-    geom_body.set(
-        "pos",
-        f"0 0 {COLLISION_Z_OFFSET:.4f}",
+    add_shell_box(
+        [wall_thickness / 2.0, body_half[1], body_half[2]],
+        [-body_half[0] + wall_thickness / 2.0, 0.0, COLLISION_Z_OFFSET],
     )
-
-    set_common_collision_params(geom_body, density=DENSITY)
+    add_shell_box(
+        [body_half[0] - wall_thickness, wall_thickness / 2.0, body_half[2]],
+        [0.0, body_half[1] - wall_thickness / 2.0, COLLISION_Z_OFFSET],
+    )
+    add_shell_box(
+        [body_half[0] - wall_thickness, wall_thickness / 2.0, body_half[2]],
+        [0.0, -body_half[1] + wall_thickness / 2.0, COLLISION_Z_OFFSET],
+    )
+    add_shell_box(
+        [body_half[0] - wall_thickness, body_half[1] - wall_thickness,
+         top_thickness / 2.0],
+        [0.0, 0.0,
+         COLLISION_Z_OFFSET + body_half[2] - top_thickness / 2.0],
+    )
 
 
     start_x = -(studs_x - 1) * STUD_PITCH / 2.0

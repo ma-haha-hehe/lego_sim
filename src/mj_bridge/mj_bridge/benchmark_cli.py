@@ -66,7 +66,7 @@ def main(argv=None):
     run_cmd.add_argument("--output-dir", default="runs/latest")
     run_cmd.add_argument("--headless", action="store_true")
     run_cmd.add_argument("--observation", choices=["oracle", "rgbd"], default="oracle")
-    run_cmd.add_argument("--connection-mode", choices=["snap", "physics"], default="snap")
+    run_cmd.add_argument("--connection-mode", choices=["snap", "physics"], default="physics")
 
     score_cmd = commands.add_parser("score", help="score an exported actual_state YAML/JSON")
     score_cmd.add_argument("--manifest", required=True)

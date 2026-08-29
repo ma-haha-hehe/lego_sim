@@ -17,7 +17,7 @@ DEFAULT_REGISTRY = PACKAGE_DIR / "part_registry.yaml"
 TABLE_TOP_Z = 0.04
 ASSEMBLY_ORIGIN = (0.35, 0.35)
 BRICK_COLLISION_CENTER_OFFSET_Z = -0.009
-BASE_STUD_TOP_Z = 0.050
+BASE_PLATE_TOP_Z = 0.046
 DEFAULT_SPAWN_REGION = {"x": [0.30, 0.68], "y": [-0.42, 0.12]}
 
 
@@ -208,7 +208,7 @@ def generate_episode(product: dict, *, seed: int, registry: dict | None = None,
             "id": block["id"], "type": block["type"], "color": block["color"],
             "body_name": body_name(block["type"], block["id"]),
             "position": [ASSEMBLY_ORIGIN[0] + p[0], ASSEMBLY_ORIGIN[1] + p[1],
-                         BASE_STUD_TOP_Z + float(spec["size_m"][2]) / 2
+                         BASE_PLATE_TOP_Z + float(spec["size_m"][2]) / 2
                          - BRICK_COLLISION_CENTER_OFFSET_Z + p[2]],
             "yaw_rad": math.radians(float(block["target"].get("yaw_deg", 0.0))),
         })

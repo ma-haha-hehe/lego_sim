@@ -68,7 +68,7 @@ ros2 launch mj_bridge lego_bench.launch.py \
   seed:=42 \
   headless:=false \
   observation:=oracle \
-  connection_mode:=snap \
+  connection_mode:=physics \
   executor:=none
 ```
 
@@ -159,10 +159,24 @@ grasp generator, controller, or complete policy. See
 
 `observation:=oracle` publishes exact MuJoCo poses and is intended for planning and control experiments. `observation:=rgbd` enables image-based evaluation.
 
-`connection_mode:=snap` uses deterministic grasp attachment and documented
-target-aware stud alignment. This isolates sequencing and motion-planning
-experiments from contact-model variance. `connection_mode:=physics` disables
-these constraints and leaves grasping and engagement to MuJoCo contacts.
+`connection_mode:=physics` is the default and leaves grasping and engagement
+to MuJoCo contacts. In physics mode, grasp confirmation requires sustained
+contact with both fingertips, but no weld, pose correction, or target snap is
+created. Brick mass and principal inertia come from the public part registry;
+gravity, friction, contact compliance, and the Panda actuator dynamics remain
+active in both modes. Run the reference executor against raw contact physics
+with:
+
+```bash
+./run_reference_pipeline.sh --connection-mode physics
+```
+
+The compound collision model includes an open underside so studs enter the
+brick cavity during placement. It approximates the external shell and fit, but
+is not a calibrated material model of stud-and-tube interference.
+`connection_mode:=snap` adds deterministic grasp attachment and target-aware
+stud alignment, which is useful when planner experiments must be isolated from
+contact-model variance.
 Results should only be compared when product, seed, observation mode,
 connection mode, tolerances, and simulator version are identical.
 

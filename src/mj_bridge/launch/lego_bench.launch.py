@@ -116,7 +116,7 @@ def generate_launch_description():
         DeclareLaunchArgument("output_dir", default_value="/tmp/lego_bench/latest"),
         DeclareLaunchArgument("headless", default_value="false"),
         DeclareLaunchArgument("observation", default_value="oracle"),
-        DeclareLaunchArgument("connection_mode", default_value="snap"),
+        DeclareLaunchArgument("connection_mode", default_value="physics"),
         DeclareLaunchArgument("executor", default_value="none"),
         OpaqueFunction(function=launch_setup),
     ])

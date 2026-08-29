@@ -7,7 +7,7 @@ SEED=42
 OUTPUT_DIR="${REPO_DIR}/runs/reference-seed-42"
 HEADLESS=false
 OBSERVATION=oracle
-CONNECTION_MODE=snap
+CONNECTION_MODE=physics
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

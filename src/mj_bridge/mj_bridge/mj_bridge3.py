@@ -210,8 +210,8 @@ TABLE_TOP_Z = 0.04
 BASE_PLATE_THICKNESS = 0.006
 BASE_STUD_HEIGHT = 0.004
 
-BASE_STUD_TOP_Z = TABLE_TOP_Z + BASE_PLATE_THICKNESS + BASE_STUD_HEIGHT
-BRICK_ON_BASE_CENTER_Z = BASE_STUD_TOP_Z + BRICK_BODY_HALF_HEIGHT - COLLISION_Z_OFFSET
+BASE_PLATE_TOP_Z = TABLE_TOP_Z + BASE_PLATE_THICKNESS
+BRICK_ON_BASE_CENTER_Z = BASE_PLATE_TOP_Z + BRICK_BODY_HALF_HEIGHT - COLLISION_Z_OFFSET
 
 BASE_PLATE_HALF_X = 12 * STUD_PITCH / 2.0
 BASE_PLATE_HALF_Y = 12 * STUD_PITCH / 2.0
@@ -369,7 +369,7 @@ class MuJoCoActionServer(Node):
         self.reset_service = self.create_service(Trigger, "/mj_bridge/reset", self.handle_reset)
         self.result_service = self.create_service(Trigger, "/mj_bridge/result", self.handle_result)
         self.observation_mode = os.environ.get("LEGO_BENCH_OBSERVATION", "oracle")
-        self.connection_mode = os.environ.get("LEGO_BENCH_CONNECTION_MODE", "snap")
+        self.connection_mode = os.environ.get("LEGO_BENCH_CONNECTION_MODE", "physics")
         self.camera_renderer = None
         if self.observation_mode == "rgbd":
             self.init_virtual_camera()
@@ -1178,7 +1178,7 @@ class MuJoCoActionServer(Node):
 
 
         brick_bottom_z = pos[2] - BRICK_BODY_HALF_HEIGHT
-        vertical_gap = abs(brick_bottom_z - BASE_STUD_TOP_Z)
+        vertical_gap = abs(brick_bottom_z - BASE_PLATE_TOP_Z)
 
         if vertical_gap > BASE_SNAP_VERTICAL_TOL:
             return False
@@ -1487,8 +1487,8 @@ class MuJoCoActionServer(Node):
         return left_id in touching, right_id in touching
 
     def update_grasp_constraint(self):
-        """Attach a contact-verified block or release it in snap mode."""
-        if self.connection_mode != "snap" or not self.episode_manifest:
+        """Track a contact-verified grasp and optionally attach it in snap mode."""
+        if not self.episode_manifest:
             return
         with self.mj_lock:
             if self.gripper_mode == "open":
@@ -1496,14 +1496,16 @@ class MuJoCoActionServer(Node):
                 self.grasp_contact_since = None
                 if self.grasped_block is not None:
                     released = self.grasped_block
-                    self.fake_welds = [
-                        weld for weld in self.fake_welds
-                        if not (weld["parent"] == "hand" and weld["child"] == released)
-                    ]
-                    self.welded_pairs.discard(("hand", released))
+                    if self.connection_mode == "snap":
+                        self.fake_welds = [
+                            weld for weld in self.fake_welds
+                            if not (weld["parent"] == "hand" and weld["child"] == released)
+                        ]
+                        self.welded_pairs.discard(("hand", released))
                     self.grasped_block = None
                     self.get_logger().info(f"[GRASP_RELEASE] {released}")
-                    self.settle_released_block(released)
+                    if self.connection_mode == "snap":
+                        self.settle_released_block(released)
                 return
             if (self.gripper_mode not in {"closing", "close_hold"} or
                     self.grasped_block is not None):
@@ -1572,12 +1574,16 @@ class MuJoCoActionServer(Node):
             correction = float(np.linalg.norm(
                 block_collision_center_world(self.data, body_id) - grasp_center
             ))
-            self.create_fake_weld("hand", body_name)
-            self.welded_pairs.add(("hand", body_name))
             self.grasped_block = body_name
             contact_time = now - self.grasp_contact_since
+            if self.connection_mode == "snap":
+                self.create_fake_weld("hand", body_name)
+                self.welded_pairs.add(("hand", body_name))
+                event = "GRASP_ATTACH"
+            else:
+                event = "GRASP_PHYSICS_CONFIRMED"
             self.get_logger().info(
-                f"[GRASP_ATTACH] {body_name}, dual_finger_contact=true, "
+                f"[{event}] {body_name}, dual_finger_contact=true, "
                 f"contact_time={contact_time:.3f}s, center_error={correction:.4f}m"
             )
 

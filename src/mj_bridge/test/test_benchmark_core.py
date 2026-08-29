@@ -119,6 +119,70 @@ def test_table_contact_resists_robot_scale_downward_force():
         assert minimum_collision_bottom >= 0.0395
 
 
+def test_generated_brick_uses_registered_mass_and_box_inertia():
+    product = normalize_product({"blocks": [
+        {"name": "small", "type": "brick_2x2", "pos": [0, 0, 0]},
+        {"name": "large", "type": "brick_4x2", "pos": [0, 0, 0.0192]},
+    ]})
+    with tempfile.TemporaryDirectory() as directory:
+        directory = Path(directory)
+        product_file = directory / "product.yaml"
+        product_file.write_text(yaml.safe_dump(product), encoding="utf-8")
+        episode, scene = generate_files(str(product_file), 12, str(directory / "run"))
+        model = mujoco.MjModel.from_xml_path(str(scene))
+        expected_masses = {"small": 0.012, "large": 0.022}
+        for item in episode["spawned_blocks"]:
+            body_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_BODY, item["body_name"]
+            )
+            assert math.isclose(
+                float(model.body_mass[body_id]), expected_masses[item["id"]], rel_tol=1e-9
+            )
+
+
+def test_hollow_collision_shell_allows_three_physics_layers_to_settle():
+    product = normalize_product({"blocks": [
+        {"name": "base", "type": "brick_2x2", "pos": [0, 0, 0]},
+        {"name": "middle", "type": "brick_2x2", "pos": [0, 0, 0.0192]},
+        {"name": "top", "type": "brick_2x2", "pos": [0, 0, 0.0384]},
+    ]})
+    with tempfile.TemporaryDirectory() as directory:
+        directory = Path(directory)
+        product_file = directory / "product.yaml"
+        product_file.write_text(yaml.safe_dump(product), encoding="utf-8")
+        episode, scene = generate_files(str(product_file), 42, str(directory / "run"))
+        model = mujoco.MjModel.from_xml_path(str(scene))
+        data = mujoco.MjData(model)
+        mujoco.mj_forward(model, data)
+
+        for target in episode["target_blocks"]:
+            body_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_BODY, target["body_name"]
+            )
+            joint_id = int(model.body_jntadr[body_id])
+            qpos_address = int(model.jnt_qposadr[joint_id])
+            dof_address = int(model.jnt_dofadr[joint_id])
+            yaw = float(target["yaw_rad"])
+            data.qpos[qpos_address:qpos_address + 3] = [
+                target["position"][0], target["position"][1], target["position"][2] + 0.002,
+            ]
+            data.qpos[qpos_address + 3:qpos_address + 7] = [
+                math.cos(yaw / 2.0), 0.0, 0.0, math.sin(yaw / 2.0),
+            ]
+            data.qvel[dof_address:dof_address + 6] = 0.0
+            mujoco.mj_forward(model, data)
+            for _ in range(1500):
+                mujoco.mj_step(model, data)
+
+        for target in episode["target_blocks"]:
+            body_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_BODY, target["body_name"]
+            )
+            error = data.xpos[body_id] - np.asarray(target["position"], dtype=float)
+            assert np.linalg.norm(error[:2]) < 0.001
+            assert abs(float(error[2])) < 0.001
+
+
 def test_snap_grasp_aligns_visual_and_collision_center_between_fingers():
     product = normalize_product({"blocks": [
         {"name": "test_block", "type": "brick_2x2", "pos": [0, 0, 0]},

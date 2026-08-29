@@ -96,6 +96,7 @@ public:
     declare_parameter("gripper_offset_m", 0.1234);
     declare_parameter("grasp_descent_m", 0.170);
     declare_parameter("place_descent_m", 0.155);
+    declare_parameter("place_press_depth_m", 0.001);
     declare_parameter("cartesian_speed_scale", 0.12);
     declare_parameter("lift_speed_scale", 0.35);
     declare_parameter("gripper_open_m", 0.04);
@@ -417,6 +418,7 @@ bool execute_task(
   const double gripper_offset = node.get_parameter("gripper_offset_m").as_double();
   const double grasp_descent = node.get_parameter("grasp_descent_m").as_double();
   const double place_descent = node.get_parameter("place_descent_m").as_double();
+  const double place_press_depth = node.get_parameter("place_press_depth_m").as_double();
   const double cartesian_speed = node.get_parameter("cartesian_speed_scale").as_double();
   const double lift_speed = node.get_parameter("lift_speed_scale").as_double();
 
@@ -469,7 +471,7 @@ bool execute_task(
   const double correction_x = task.target.position.x - carried.pose.position.x;
   const double correction_y = task.target.position.y - carried.pose.position.y;
   const double correction_z =
-    task.target.position.z + place_descent - carried.pose.position.z;
+    task.target.position.z + place_descent - place_press_depth - carried.pose.position.z;
   corrected.position.x += correction_x;
   corrected.position.y += correction_y;
   corrected.position.z += correction_z;
