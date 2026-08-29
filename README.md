@@ -75,6 +75,30 @@ ros2 launch mj_bridge lego_bench.launch.py \
 This mode is intended for an external policy. For a headless RGB-D episode,
 set `headless:=true` and `observation:=rgbd`.
 
+Python policies can also bypass ROS 2 and MoveIt while retaining the same
+product generation, MuJoCo model, Panda actuators, and scoring contract:
+
+```python
+from mj_bridge.gym_env import LegoBenchEnv
+
+with LegoBenchEnv(
+    "examples/products/traffic_light.yaml",
+    seed=42,
+    output_dir="runs/python-policy",
+) as env:
+    observation, info = env.reset()
+    observation, reward, terminated, truncated, info = env.step(
+        env.neutral_action
+    )
+    result = env.export_result()
+```
+
+Actions are nine absolute actuator controls in the model's actuator order.
+Replace `neutral_action` with a controller or policy output. The environment
+uses raw contact physics and supports both oracle and RGB-D observations. See
+[Direct Python API](docs/python-api.md) and the runnable
+[Python example](examples/lego_gym_env.py).
+
 ## Product format
 
 Products use schema version 1:
@@ -214,7 +238,7 @@ The Compose configuration uses host networking for ROS 2 discovery and stores ep
 examples/                     Product and executor examples
 docs/                         Format, architecture, and integration notes
 src/mj_bridge/launch/         Complete ROS 2 launch file
-src/mj_bridge/mj_bridge/      Simulator bridge, generator, schema, and assets
+src/mj_bridge/mj_bridge/      Simulator bridge, direct Python API, generator, schema, and assets
 src/mj_bridge/test/           Determinism, compatibility, and scoring tests
 src/lego_executor/            Reference planner adapter and MoveIt executor
 ```

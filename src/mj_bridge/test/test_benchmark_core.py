@@ -4,11 +4,13 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+import pytest
 import yaml
 
 from mj_bridge.benchmark_core import generate_episode, normalize_product, score_episode
 from mj_bridge.benchmark_cli import generate as generate_files
 from mj_bridge.executor_planner import plan_assembly
+from mj_bridge.gym_env import LegoBenchEnv
 from mj_bridge.grasp_geometry import (
     align_block_to_grasp_center, block_collision_center_world, grasp_center_world,
 )
@@ -181,6 +183,60 @@ def test_hollow_collision_shell_allows_three_physics_layers_to_settle():
             error = data.xpos[body_id] - np.asarray(target["position"], dtype=float)
             assert np.linalg.norm(error[:2]) < 0.001
             assert abs(float(error[2])) < 0.001
+
+
+def test_direct_python_environment_reset_step_and_export():
+    product = normalize_product({"blocks": [
+        {"name": "test_block", "type": "brick_2x2", "pos": [0, 0, 0]},
+    ]})
+    with tempfile.TemporaryDirectory() as directory:
+        directory = Path(directory)
+        product_file = directory / "product.yaml"
+        product_file.write_text(yaml.safe_dump(product), encoding="utf-8")
+        with LegoBenchEnv(
+            product_file,
+            seed=21,
+            output_dir=directory / "episode",
+            observation_mode="oracle",
+            frame_skip=2,
+            max_episode_steps=2,
+        ) as environment:
+            observation, info = environment.reset()
+            assert observation["episode_id"] == "product-seed-21"
+            assert "test_block" in observation["blocks"]
+            assert len(observation["robot"]["joint_names"]) == 9
+            assert environment.neutral_action.shape == environment.action_shape
+            assert math.isclose(
+                float(observation["robot"]["joint_positions"][1]), -0.785,
+                abs_tol=1e-9,
+            )
+            assert np.allclose(
+                observation["robot"]["joint_positions"], environment.neutral_action
+            )
+            assert info["connection_mode"] == "physics"
+
+            with pytest.raises(ValueError, match="action must have shape"):
+                environment.step(np.zeros(environment.model.nu + 1))
+
+            observation, reward, terminated, truncated, info = environment.step(
+                environment.neutral_action
+            )
+            assert observation["simulation_time_s"] > 0.0
+            assert np.max(np.abs(
+                observation["robot"]["joint_positions"] - environment.neutral_action
+            )) < 0.01
+            assert 0.0 <= reward <= 1.0
+            assert not (terminated and truncated)
+            result = environment.export_result()
+            assert result["connection_mode"] == "physics"
+            assert (directory / "episode" / "actual_state.json").is_file()
+            assert (directory / "episode" / "result.json").is_file()
+
+            previous_position = observation["blocks"]["test_block"]["position"]
+            regenerated, info = environment.reset(seed=22)
+            assert regenerated["episode_id"] == "product-seed-22"
+            assert regenerated["blocks"]["test_block"]["position"] != previous_position
+            assert info["step_count"] == 0
 
 
 def test_snap_grasp_aligns_visual_and_collision_center_between_fingers():

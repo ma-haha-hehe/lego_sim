@@ -27,7 +27,7 @@ setup(
             'mj_bridge/hand.xml',
         ]),
     ],
-    install_requires=['setuptools', 'PyYAML', 'numpy'],
+    install_requires=['setuptools', 'PyYAML', 'numpy', 'mujoco>=3.2,<4'],
     zip_safe=True,
     maintainer='Wenbo Ma',
     maintainer_email='wenbo.ma@rwth-aachen.de',

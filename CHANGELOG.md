@@ -14,6 +14,7 @@
 - Added balanced headlight, key, and fill lighting for clearer workspace visibility.
 - Added a direct Cartesian fallback when overhead MoveIt planning cannot find a path.
 - Made raw MuJoCo contact physics the default connection mode, added contact-only grasp confirmation, registered part masses and inertias, hollow underside collision shells, and a small configurable placement preload.
+- Added a direct Python environment for non-ROS policies with seeded reset, validated Panda actuator actions, oracle or RGB-D observations, standard five-value steps, scoring, and result export.
 - Added a single-command reference pipeline and documented external executor integration.
 - Extended the container, dependency installer, and CI checks for the executor package.
 

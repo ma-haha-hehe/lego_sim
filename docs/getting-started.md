@@ -42,7 +42,7 @@ ros2 launch mj_bridge lego_bench.launch.py \
   output_dir:=$PWD/runs/traffic-light-0 \
   headless:=true \
   observation:=oracle \
-  connection_mode:=snap \
+  connection_mode:=physics \
   executor:=none
 ```
 
@@ -63,4 +63,18 @@ Call `/mj_bridge/result` before shutting down if the final JSON artifacts are re
 
 ## Choosing an evaluation mode
 
-Use `oracle` to isolate planning and control performance. Use `rgbd` when the method should perform its own perception. Use `snap` for repeatable assembly engagement or `physics` to evaluate without automatic connections. Record these choices with every result.
+Use `oracle` to isolate planning and control performance. Use `rgbd` when the method should perform its own perception. Raw MuJoCo contact physics is the default; use `snap` only when repeatable assembly engagement is part of the experimental condition. Record these choices with every result.
+
+## Direct Python policies
+
+Policies that do not need ROS 2 or MoveIt can load the same generated scene
+through `LegoBenchEnv`. The API accepts any valid product YAML, applies the same
+seeded loose-part generation and scoring rules, and exposes absolute Panda
+actuator controls:
+
+```bash
+python examples/lego_gym_env.py
+```
+
+See [Direct Python API](python-api.md) for reset, step, observation, RGB-D, and
+result-export details.

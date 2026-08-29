@@ -8,8 +8,8 @@ oracle_moveit_executor:
     acceleration_scale: 0.35
     approach_height_m: 0.15
     gripper_offset_m: 0.1234
-    grasp_descent_m: 0.165
-    place_descent_m: 0.15
+    grasp_descent_m: 0.170
+    place_descent_m: 0.155
     place_press_depth_m: 0.001
     cartesian_speed_scale: 0.12
     lift_speed_scale: 0.35

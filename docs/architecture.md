@@ -21,7 +21,7 @@ episode manifest -----> standalone MuJoCo scene
                 +------ reference or external method ------+
 ```
 
-`benchmark_core.py` contains pure-Python product handling, seeded placement, and scoring. `executor_planner.py` derives a stable-ID, bottom-up execution plan. `scene_builder.py` converts an episode manifest into MJCF. `mj_bridge3.py` owns simulation time, trajectory actions, observations, reset, and result export. `lego_bench.launch.py` adds the robot description, TF, MoveIt planning services, and optionally the `lego_executor` baseline.
+`benchmark_core.py` contains pure-Python product handling, seeded placement, and scoring. `executor_planner.py` derives a stable-ID, bottom-up execution plan. `scene_builder.py` converts an episode manifest into MJCF. `gym_env.py` provides direct MuJoCo control for Python policies. `mj_bridge3.py` owns the ROS-facing simulation loop, trajectory actions, observations, reset, and result export. `lego_bench.launch.py` adds the robot description, TF, MoveIt planning services, and optionally the `lego_executor` baseline.
 
 ## Reproducibility boundary
 

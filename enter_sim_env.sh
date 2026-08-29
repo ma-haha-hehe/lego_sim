@@ -36,4 +36,5 @@ echo "Validate: lego-bench validate examples/products/traffic_light.yaml"
 echo "Simulator only: ./run_panda_lego_sim.sh --headless"
 echo "Reference pipeline: ./run_reference_pipeline.sh --headless"
 echo "Environment only: ros2 launch mj_bridge lego_bench.launch.py headless:=true executor:=none"
+echo "Direct Python API: python examples/lego_gym_env.py"
 unset _lego_repo
