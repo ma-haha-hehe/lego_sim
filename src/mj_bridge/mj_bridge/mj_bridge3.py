@@ -178,7 +178,7 @@ GRIPPER_CLOSE_VALUE = 0.0
 
 
 
-GRIPPER_ACTION_EXTRA_SLEEP = 0.1
+GRIPPER_ACTION_EXTRA_SLEEP = 0.02
 
 # ============================================================
 

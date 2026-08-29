@@ -4,17 +4,20 @@ oracle_moveit_executor:
     wait_timeout_s: 30.0
     planning_time_s: 10.0
     planning_attempts: 3
-    velocity_scale: 0.35
-    acceleration_scale: 0.35
+    velocity_scale: 0.75
+    acceleration_scale: 0.75
     approach_height_m: 0.15
     gripper_offset_m: 0.1234
     grasp_descent_m: 0.170
     place_descent_m: 0.155
     place_press_depth_m: 0.001
-    cartesian_speed_scale: 0.12
-    lift_speed_scale: 0.35
+    cartesian_speed_scale: 0.30
+    lift_speed_scale: 0.55
     gripper_open_m: 0.04
     gripper_closed_m: 0.014
+    gripper_duration_s: 0.35
+    motion_settle_s: 0.10
+    release_settle_s: 0.20
     grasp_confirmation_timeout_s: 5.0
     tool_yaw_offset_deg: 45.0
     verify_lift_m: 0.025

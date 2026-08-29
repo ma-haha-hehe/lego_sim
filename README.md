@@ -55,8 +55,7 @@ planning, execution, and result export):
 ./run_reference_pipeline.sh --headless
 ```
 
-Remove `--headless` to open MuJoCo and RViz. The traffic-light example takes
-about one minute on a typical workstation. The launch remains open after the
+Remove `--headless` to open MuJoCo and RViz. The launch remains open after the
 executor finishes so the final scene can be inspected; press `Ctrl+C` to stop it.
 Results are written under `runs/reference-seed-42/`.
 
@@ -171,6 +170,11 @@ Overhead transfers try MoveIt planning first. If all planning attempts fail,
 the reference executor falls back to a direct Cartesian point-to-point motion
 with collision checking disabled. Vertical approach and retreat segments always
 use direct Cartesian motion and do not invoke the OMPL planner.
+
+Reference motion speed, Cartesian speed, gripper duration, and the short
+state-publication delays between actions are configured in
+`src/lego_executor/config/executor.yaml`. The defaults provide a fast baseline;
+reduce the speed scales when testing a controller with lower dynamic limits.
 
 The reference executor consumes only the public benchmark topics, actions, and
 services. It is a baseline and an executable integration example, not a required

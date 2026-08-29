@@ -90,17 +90,20 @@ public:
     declare_parameter("wait_timeout_s", 30.0);
     declare_parameter("planning_time_s", 10.0);
     declare_parameter("planning_attempts", 3);
-    declare_parameter("velocity_scale", 0.35);
-    declare_parameter("acceleration_scale", 0.35);
+    declare_parameter("velocity_scale", 0.75);
+    declare_parameter("acceleration_scale", 0.75);
     declare_parameter("approach_height_m", 0.15);
     declare_parameter("gripper_offset_m", 0.1234);
     declare_parameter("grasp_descent_m", 0.170);
     declare_parameter("place_descent_m", 0.155);
     declare_parameter("place_press_depth_m", 0.001);
-    declare_parameter("cartesian_speed_scale", 0.12);
-    declare_parameter("lift_speed_scale", 0.35);
+    declare_parameter("cartesian_speed_scale", 0.30);
+    declare_parameter("lift_speed_scale", 0.55);
     declare_parameter("gripper_open_m", 0.04);
     declare_parameter("gripper_closed_m", 0.014);
+    declare_parameter("gripper_duration_s", 0.35);
+    declare_parameter("motion_settle_s", 0.10);
+    declare_parameter("release_settle_s", 0.20);
     declare_parameter("grasp_confirmation_timeout_s", 5.0);
     declare_parameter("tool_yaw_offset_deg", 45.0);
     declare_parameter("verify_lift_m", 0.025);
@@ -147,7 +150,8 @@ public:
       return false;
     }
     RCLCPP_INFO(get_logger(), "Benchmark episode reset");
-    std::this_thread::sleep_for(500ms);
+    std::this_thread::sleep_for(
+      std::chrono::duration<double>(get_parameter("motion_settle_s").as_double()));
     return future.get()->success;
   }
 
@@ -243,7 +247,8 @@ public:
     goal.trajectory.joint_names = {"panda_finger_joint1", "panda_finger_joint2"};
     trajectory_msgs::msg::JointTrajectoryPoint point;
     point.positions = {position, position};
-    point.time_from_start = rclcpp::Duration::from_seconds(1.0);
+    point.time_from_start = rclcpp::Duration::from_seconds(
+      get_parameter("gripper_duration_s").as_double());
     goal.trajectory.points.push_back(point);
     auto handle_future = gripper_client_->async_send_goal(goal);
     if (handle_future.wait_for(5s) != std::future_status::ready || !handle_future.get()) {
@@ -315,10 +320,10 @@ bool move_to_pose(
     if (arm.move() == moveit::core::MoveItErrorCode::SUCCESS) {
       arm.clearPoseTargets();
       arm.clearPathConstraints();
-      // Let the bridge publish the converged joint state before deriving the
-      // next Cartesian trajectory. This avoids a stale start state after a
-      // long point-to-point motion.
-      std::this_thread::sleep_for(500ms);
+      // Wait for one or two bridge publications before deriving the next
+      // Cartesian trajectory from the measured state.
+      std::this_thread::sleep_for(
+        std::chrono::duration<double>(node.get_parameter("motion_settle_s").as_double()));
       return true;
     }
     RCLCPP_WARN(
@@ -453,7 +458,8 @@ bool execute_task(
   if (!move_linear(node, arm, grasp_descent, lift_speed)) {
     return false;
   }
-  std::this_thread::sleep_for(500ms);
+  std::this_thread::sleep_for(
+    std::chrono::duration<double>(node.get_parameter("motion_settle_s").as_double()));
   const BlockState lifted = node.block(task.id);
   if (lifted.pose.position.z - source.pose.position.z < node.get_parameter("verify_lift_m").as_double()) {
     RCLCPP_ERROR(node.get_logger(), "[%s] lift verification failed", task.id.c_str());
@@ -491,7 +497,8 @@ bool execute_task(
   if (!node.command_gripper(node.get_parameter("gripper_open_m").as_double())) {
     return false;
   }
-  std::this_thread::sleep_for(500ms);
+  std::this_thread::sleep_for(
+    std::chrono::duration<double>(node.get_parameter("release_settle_s").as_double()));
   add_block(scene, arm.getPlanningFrame(), task.id, task.type, task.target);
   RCLCPP_INFO(node.get_logger(), "[%s] RETREAT", task.id.c_str());
   return move_linear(node, arm, approach, lift_speed);
@@ -523,7 +530,8 @@ int main(int argc, char ** argv)
     arm.setMaxVelocityScalingFactor(node->get_parameter("velocity_scale").as_double());
     arm.setMaxAccelerationScalingFactor(node->get_parameter("acceleration_scale").as_double());
     add_table(scene, arm.getPlanningFrame());
-    std::this_thread::sleep_for(500ms);
+    std::this_thread::sleep_for(
+      std::chrono::duration<double>(node->get_parameter("motion_settle_s").as_double()));
 
     const auto tasks = node->tasks();
     RCLCPP_INFO(node->get_logger(), "Loaded %zu stable-ID assembly tasks", tasks.size());
