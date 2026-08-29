@@ -1,5 +1,8 @@
 # LEGO Assembly Benchmark for Panda and MuJoCo
 
+[![benchmark-ci](https://github.com/ma-haha-hehe/lego_sim/actions/workflows/benchmark-ci.yml/badge.svg)](https://github.com/ma-haha-hehe/lego_sim/actions/workflows/benchmark-ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 A reproducible ROS 2 benchmark for evaluating manipulation, perception, and assembly methods with a Franka Emika Panda robot in MuJoCo.
 
 The benchmark takes a product description in YAML, creates the required loose parts at deterministic random poses, exposes standard ROS 2 control and observation interfaces, and evaluates the final assembly. The environment is independent of the policy: a method may use MoveIt, direct joint trajectories, ground-truth state, RGB-D input, or its own perception and planning stack.
@@ -74,6 +77,36 @@ ros2 launch mj_bridge lego_bench.launch.py \
 This mode is intended for an external policy. For a headless RGB-D episode,
 set `headless:=true` and `observation:=rgbd`.
 
+## Bring your own method
+
+The simulator does not require the supplied executor. Start the environment
+with `executor:=none`, then run a policy in a second terminal after sourcing the
+same workspace. The policy may use MoveIt, publish its own joint trajectories,
+or replace the entire perception and planning stack.
+
+```bash
+# Terminal 1
+source enter_sim_env.sh
+ros2 launch mj_bridge lego_bench.launch.py \
+  product:=$PWD/examples/products/bridge.yaml \
+  seed:=17 \
+  output_dir:=$PWD/runs/my-method/bridge-17 \
+  headless:=false \
+  observation:=oracle \
+  connection_mode:=physics \
+  executor:=none
+
+# Terminal 2
+source enter_sim_env.sh
+python examples/external_executor.py
+```
+
+`examples/external_executor.py` includes clients for reset, arm trajectories,
+gripper trajectories, and result export. Replace its `policy()` method with the
+method under test. Interface details are in
+[Executor integration](docs/executor-integration.md), and reporting rules are
+in the [Evaluation protocol](docs/evaluation-protocol.md).
+
 Python policies can also bypass ROS 2 and MoveIt while retaining the same
 product generation, MuJoCo model, Panda actuators, and scoring contract:
 
@@ -118,6 +151,13 @@ blocks:
 Target positions are expressed in metres relative to the center of the assembly plate. Yaw is expressed in degrees. Part IDs must be unique.
 
 Version 0.2 provides `brick_2x2` and `brick_4x2`. A product may contain any number and arrangement of registered parts that fit in the configured source and assembly workspaces. See [Product format](docs/product-format.md) for the schema, coordinate conventions, and legacy conversion rules.
+
+The reference executor is designed for top-down pick-and-place assembly. A
+valid file is not a promise that every structure is physically executable:
+targets must remain on the 12-by-12 assembly plate, inside the Panda workspace,
+and accessible from above. Lateral insertion, part reorientation, unsupported
+floating structures, and unregistered shapes require a custom method or an
+extension to the part registry and scene builder.
 
 ## ROS 2 interface
 
@@ -228,6 +268,10 @@ lego-bench batch-generate \
 lego-bench summarize runs/traffic-light
 ```
 
+`batch-generate` prepares episode files only. A policy evaluation must run each
+seed and call `/mj_bridge/result`; see the evaluation protocol for the required
+artifacts and reporting fields.
+
 ## Docker
 
 ```bash
@@ -250,14 +294,12 @@ src/lego_executor/            Reference planner adapter and MoveIt executor
 ## Testing
 
 ```bash
-source enter_sim_env.sh
-python -m pytest -q src/mj_bridge/test/test_benchmark_core.py
-colcon test --packages-select mj_bridge lego_executor
+./check_benchmark.sh
 ```
 
-Do not replace `PYTHONPATH` after sourcing the environment script. ROS 2 adds its
-Python packages to that variable, and replacing it can hide packages such as
-`ament_flake8` and `ament_pep257` from the virtual environment.
+The repository check builds both ROS packages, runs the benchmark tests,
+validates and generates every example product, loads each generated MJCF model,
+compiles the policy examples, and runs the executor lint tests.
 
 ## License and third-party material
 

@@ -36,9 +36,32 @@ ros2 launch lego_executor oracle_executor.launch.py \
 For a minimal Python subscriber and service client, see
 `examples/external_executor.py`.
 
+The adapter exposes four helpers intended to be called from its asynchronous
+`policy()` method:
+
+```python
+await self.reset_episode()
+await self.send_arm(joint_positions, duration_s=2.0)
+await self.send_gripper(0.014, duration_s=0.4)
+result = await self.export_result()
+```
+
+Arm commands contain seven positions in Panda joint order. Gripper commands use
+one finger position for both coupled fingers: `0.04` is open and the reference
+physics grasp uses `0.014`. A method may send multi-point trajectories directly
+through the action endpoint when velocity or timing profiles are part of the
+experiment.
+
+The result service always writes `actual_state.json` and `result.json`. Its ROS
+success flag is the assembly success, so a completed but unsuccessful trial is
+still a valid benchmark result and must be retained.
+
 ## Evaluation contract
 
 A report should record the product YAML, seed, observation mode, connection
 mode, tolerance configuration, repository commit, and simulator version.
 Oracle and RGB-D results, or snap and physics results, are different
 experimental conditions and should not be pooled.
+
+See [Evaluation protocol](evaluation-protocol.md) for seed handling, required
+artifacts, and the minimum fields to report.

@@ -9,12 +9,24 @@ jobs:
       - run: >-
           apt-get update && apt-get install -y
           python3-pip python3-pytest python3-yaml python3-colcon-common-extensions
-          libyaml-cpp-dev ros-humble-moveit
+          libyaml-cpp-dev ros-humble-ament-lint-common ros-humble-moveit
           ros-humble-moveit-resources-panda-moveit-config
       - run: pip3 install "mujoco>=3.2,<4" "trimesh>=4,<5"
       - run: PYTHONPATH=src/mj_bridge python3 -m pytest -q src/mj_bridge/test/test_benchmark_core.py
-      - run: PYTHONPATH=src/mj_bridge python3 -m mj_bridge.benchmark_cli validate examples/products/traffic_light.yaml
-      - run: PYTHONPATH=src/mj_bridge python3 -m mj_bridge.benchmark_cli generate --product examples/products/traffic_light.yaml --seed 42 --output-dir /tmp/episode
-      - run: python3 -c "import mujoco; mujoco.MjModel.from_xml_path('/tmp/episode/scene.xml')"
-      - run: python3 -c "import yaml; p=yaml.safe_load(open('/tmp/episode/execution_plan.yaml')); assert [s['id'] for s in p['steps']] == ['green_base', 'yellow_middle', 'red_top']"
+      - run: python3 -m py_compile examples/external_executor.py examples/lego_gym_env.py
+      - name: Validate and generate all example products
+        run: |
+          set -e
+          for product in examples/products/*.yaml; do
+            name="$(basename "${product}" .yaml)"
+            output="/tmp/${name}"
+            PYTHONPATH=src/mj_bridge python3 -m mj_bridge.benchmark_cli validate "${product}"
+            PYTHONPATH=src/mj_bridge python3 -m mj_bridge.benchmark_cli generate \
+              --product "${product}" --seed 42 --output-dir "${output}"
+            python3 -c "import mujoco; mujoco.MjModel.from_xml_path('${output}/scene.xml')"
+          done
+      - run: python3 -c "import yaml; p=yaml.safe_load(open('/tmp/traffic_light/execution_plan.yaml')); assert [s['id'] for s in p['steps']] == ['green_base', 'yellow_middle', 'red_top']"
+      - run: python3 -c "import yaml; p=yaml.safe_load(open('/tmp/bridge/execution_plan.yaml')); assert [s['id'] for s in p['steps']] == ['left_support', 'right_support', 'top_beam']"
       - run: . /opt/ros/humble/setup.sh && colcon build --packages-select mj_bridge lego_executor --symlink-install
+      - run: . /opt/ros/humble/setup.sh && colcon test --packages-select lego_executor
+      - run: colcon test-result --test-result-base build/lego_executor --verbose

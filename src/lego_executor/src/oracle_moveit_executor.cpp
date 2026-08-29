@@ -1,20 +1,22 @@
-#include <control_msgs/action/follow_joint_trajectory.hpp>
-#include <geometry_msgs/msg/pose.hpp>
+// Copyright 2026 Wenbo Ma
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
 #include <moveit/trajectory_processing/time_optimal_trajectory_generation.h>
-#include <moveit_msgs/msg/collision_object.hpp>
-#include <moveit_msgs/msg/constraints.hpp>
-#include <moveit_msgs/msg/orientation_constraint.hpp>
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
-#include <shape_msgs/msg/solid_primitive.hpp>
-#include <std_msgs/msg/string.hpp>
-#include <std_srvs/srv/trigger.hpp>
 #include <tf2/LinearMath/Quaternion.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
@@ -30,6 +32,19 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <control_msgs/action/follow_joint_trajectory.hpp>
+#include <geometry_msgs/msg/pose.hpp>
+#include <moveit_msgs/msg/collision_object.hpp>
+#include <moveit_msgs/msg/constraints.hpp>
+#include <moveit_msgs/msg/orientation_constraint.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
+#include <shape_msgs/msg/solid_primitive.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <std_srvs/srv/trigger.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
 using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
 using namespace std::chrono_literals;
@@ -144,7 +159,8 @@ public:
       RCLCPP_ERROR(get_logger(), "Benchmark reset service is unavailable");
       return false;
     }
-    auto future = reset_client_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+    auto future = reset_client_->async_send_request(
+      std::make_shared<std_srvs::srv::Trigger::Request>());
     if (future.wait_for(10s) != std::future_status::ready) {
       RCLCPP_ERROR(get_logger(), "Benchmark reset timed out");
       return false;
@@ -182,9 +198,9 @@ public:
         order.begin(), order.end(), [&targets](
           const std::pair<std::string, double> & left,
           const std::pair<std::string, double> & right) {
-        return targets[left.first]["position"][2].as<double>() <
-               targets[right.first]["position"][2].as<double>();
-      });
+          return targets[left.first]["position"][2].as<double>() <
+          targets[right.first]["position"][2].as<double>();
+        });
     }
 
     std::vector<Task> result;
@@ -231,10 +247,11 @@ public:
     const auto timeout = std::chrono::duration<double>(
       get_parameter("grasp_confirmation_timeout_s").as_double());
     std::unique_lock<std::mutex> lock(data_mutex_);
-    return data_cv_.wait_for(lock, timeout, [this, &id]() {
-      const YAML::Node grasped = state_["grasped_block"];
-      return grasped && grasped.as<std::string>("") == id;
-    });
+    return data_cv_.wait_for(
+      lock, timeout, [this, &id]() {
+        const YAML::Node grasped = state_["grasped_block"];
+        return grasped && grasped.as<std::string>("") == id;
+      });
   }
 
   bool command_gripper(double position)
@@ -268,7 +285,8 @@ public:
     if (!result_client_->wait_for_service(10s)) {
       return "result service unavailable";
     }
-    auto future = result_client_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+    auto future = result_client_->async_send_request(
+      std::make_shared<std_srvs::srv::Trigger::Request>());
     if (future.wait_for(10s) != std::future_status::ready) {
       return "result service timed out";
     }
@@ -374,7 +392,9 @@ bool move_linear(
   return move_linear_to_pose(node, arm, target, speed_scale);
 }
 
-void add_table(moveit::planning_interface::PlanningSceneInterface & scene, const std::string & frame)
+void add_table(
+  moveit::planning_interface::PlanningSceneInterface & scene,
+  const std::string & frame)
 {
   moveit_msgs::msg::CollisionObject table;
   table.id = "benchmark_table";
@@ -461,7 +481,9 @@ bool execute_task(
   std::this_thread::sleep_for(
     std::chrono::duration<double>(node.get_parameter("motion_settle_s").as_double()));
   const BlockState lifted = node.block(task.id);
-  if (lifted.pose.position.z - source.pose.position.z < node.get_parameter("verify_lift_m").as_double()) {
+  if (lifted.pose.position.z - source.pose.position.z <
+    node.get_parameter("verify_lift_m").as_double())
+  {
     RCLCPP_ERROR(node.get_logger(), "[%s] lift verification failed", task.id.c_str());
     return false;
   }

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Increased reference arm, Cartesian, and gripper speeds while retaining
+  measured-state convergence and physical grasp confirmation.
+- Added a complete third-party ROS 2 policy adapter with reset, trajectory, and
+  result helpers.
+- Added an evaluation protocol, public support boundaries, and a one-command
+  repository check.
+- Extended CI coverage to every bundled product and policy example.
+
 ## 0.2.0 - 2026-08-24
 
 - Added dependency-aware assembly plans with stable part IDs.
