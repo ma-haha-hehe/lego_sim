@@ -42,6 +42,8 @@ setup(
         'console_scripts': [
             'mj_bridge = mj_bridge.mj_bridge3:main',
             'lego-bench = mj_bridge.benchmark_cli:main',
+            'lego-vision = mj_bridge.vision_node:main',
+            'lego-vision-check = mj_bridge.vision_pipeline:main',
         ],
     },
 )

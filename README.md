@@ -13,8 +13,9 @@ The benchmark takes a product description in YAML, creates the required loose pa
 - Non-overlapping random placement inside a fixed table workspace
 - Panda arm and gripper control through `FollowJointTrajectory`
 - MoveIt 2 planning and trajectory execution
-- Ground-truth and RGB-D observation modes
-- RGB, metric depth, instance segmentation, camera calibration, and TF
+- Ground-truth and RGB-D observation modes with an explicit no-oracle boundary
+- RGB, metric depth, camera calibration, and TF
+- GroundingDINO, SAM, and FoundationPose visual reference pipeline
 - Explicit reset and result services for automated evaluation
 - Dependency-aware assembly planning with stable part IDs
 - Reference Panda/MoveIt pick-and-place state machine
@@ -61,6 +62,11 @@ planning, execution, and result export):
 Remove `--headless` to open MuJoCo and RViz. The launch remains open after the
 executor finishes so the final scene can be inspected; press `Ctrl+C` to stop it.
 Results are written under `runs/reference-seed-42/`.
+
+To run the visual reference pipeline, see
+[Visual pick-and-place pipeline](docs/visual-pipeline.md). A CUDA-free geometry
+backend is included for simulator integration tests; production visual runs use
+GroundingDINO, SAM and FoundationPose.
 
 To start the environment without the reference executor:
 
@@ -167,11 +173,12 @@ extension to the part registry and scene builder.
 | `/mj_panda_hand_controller/follow_joint_trajectory` | Action | Gripper control |
 | `/joint_states` | Topic | Robot state |
 | `/lego_bench/goal` | Topic | Product and target poses as JSON |
-| `/lego_bench/ground_truth` | Topic | Authoritative part poses as JSON |
+| `/lego_bench/ground_truth` | Topic | Authoritative part poses as JSON (oracle mode only) |
 | `/camera/color/image_raw` | Topic | `rgb8` image |
 | `/camera/depth/image_raw` | Topic | `32FC1` metric depth |
-| `/camera/segmentation` | Topic | MuJoCo `32SC2` object ID/type image |
 | `/camera/camera_info` | Topic | Pinhole camera calibration |
+| `/lego_bench/vision_detections` | Topic | Visual pose estimates as JSON |
+| `/mj_bridge/capture_rgbd` | Service | Request one fresh RGB-D frame at a stationary pose |
 | `/mj_bridge/benchmark_state` | Topic | Live score as JSON |
 | `/mj_bridge/reset` | Service | Restore the initial episode state |
 | `/mj_bridge/result` | Service | Score and export the current state |
@@ -225,7 +232,10 @@ grasp generator, controller, or complete policy. See
 
 ## Evaluation modes
 
-`observation:=oracle` publishes exact MuJoCo poses and is intended for planning and control experiments. `observation:=rgbd` enables image-based evaluation.
+`observation:=oracle` publishes exact MuJoCo poses and is intended for planning
+and control experiments. `observation:=rgbd` publishes only RGB-D images and
+camera calibration; ground-truth poses and simulator segmentation are not
+published in this mode.
 
 `connection_mode:=physics` is the default and leaves grasping and engagement
 to MuJoCo contacts. In physics mode, grasp confirmation requires sustained

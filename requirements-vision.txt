@@ -1,0 +1,5 @@
+# Install a CUDA build of torch and torchvision before this file.  FoundationPose
+# and its native CUDA extensions are installed from its upstream repository.
+accelerate>=0.30,<2
+Pillow>=9,<12
+transformers>=4.40,<5

@@ -7,3 +7,7 @@ max_episode_time_s: 300.0
 position_tolerance_xy_m: 0.006
 position_tolerance_z_m: 0.004
 yaw_tolerance_deg: 8.0
+# A physics run is not successful when the part visibly shifts in the closed
+# gripper, even if it later happens to settle inside the placement tolerance.
+grasp_translation_slip_tolerance_m: 0.002
+grasp_rotation_slip_tolerance_deg: 3.0

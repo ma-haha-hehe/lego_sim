@@ -21,7 +21,9 @@ source "${REPO_DIR}/install/setup.bash"
 set -u
 
 export PYTHONPATH="${REPO_DIR}/src/mj_bridge:${PYTHONPATH:-}"
-python3 -m pytest -q src/mj_bridge/test/test_benchmark_core.py
+python3 -m pytest -q \
+  src/mj_bridge/test/test_benchmark_core.py \
+  src/mj_bridge/test/test_vision_pipeline.py
 python3 -m py_compile examples/external_executor.py examples/lego_gym_env.py
 
 for product in examples/products/*.yaml; do

@@ -225,13 +225,106 @@ def angular_error(actual: float, target: float, symmetry_deg: float) -> float:
     return abs((actual - target + period / 2) % period - period / 2)
 
 
+def minimum_cost_assignment(costs: list[list[float]]) -> list[int]:
+    """Return the minimum-cost column for each row using the Hungarian method."""
+    if not costs:
+        return []
+    row_count = len(costs)
+    column_count = len(costs[0])
+    if row_count > column_count or any(len(row) != column_count for row in costs):
+        raise ValueError("assignment matrix must be rectangular with rows <= columns")
+    u = [0.0] * (row_count + 1)
+    v = [0.0] * (column_count + 1)
+    matched_row = [0] * (column_count + 1)
+    previous_column = [0] * (column_count + 1)
+    for row in range(1, row_count + 1):
+        matched_row[0] = row
+        column = 0
+        minimum = [float("inf")] * (column_count + 1)
+        used = [False] * (column_count + 1)
+        while True:
+            used[column] = True
+            active_row = matched_row[column]
+            delta = float("inf")
+            next_column = 0
+            for candidate in range(1, column_count + 1):
+                if used[candidate]:
+                    continue
+                reduced = costs[active_row - 1][candidate - 1] - u[active_row] - v[candidate]
+                if reduced < minimum[candidate]:
+                    minimum[candidate] = reduced
+                    previous_column[candidate] = column
+                if minimum[candidate] < delta:
+                    delta = minimum[candidate]
+                    next_column = candidate
+            for candidate in range(column_count + 1):
+                if used[candidate]:
+                    u[matched_row[candidate]] += delta
+                    v[candidate] -= delta
+                else:
+                    minimum[candidate] -= delta
+            column = next_column
+            if matched_row[column] == 0:
+                break
+        while True:
+            previous = previous_column[column]
+            matched_row[column] = matched_row[previous]
+            column = previous
+            if column == 0:
+                break
+    assignment = [-1] * row_count
+    for column in range(1, column_count + 1):
+        if matched_row[column] != 0:
+            assignment[matched_row[column] - 1] = column - 1
+    return assignment
+
+
 def score_episode(manifest: dict, actual: dict, registry: dict | None = None,
                   xy_tol=0.006, z_tol=0.004, yaw_tol_deg=8.0) -> dict:
     registry = registry or load_registry()
     per_block, success = [], True
     actual_blocks = actual.get("blocks", actual)
+    target_groups: dict[tuple[str, str], list[dict]] = {}
+    observed_groups: dict[tuple[str, str], list[tuple[str, dict]]] = {}
+    targets_by_id = {target["id"]: target for target in manifest["target_blocks"]}
     for target in manifest["target_blocks"]:
-        observed = actual_blocks.get(target["id"])
+        key = (target["type"], target.get("color", "unknown"))
+        target_groups.setdefault(key, []).append(target)
+    for observed_id, observed in actual_blocks.items():
+        known_target = targets_by_id.get(observed_id, {})
+        key = (
+            observed.get("type", known_target.get("type", "")),
+            observed.get("color", known_target.get("color", "unknown")),
+        )
+        observed_groups.setdefault(key, []).append((observed_id, observed))
+
+    matched: dict[str, tuple[str, dict]] = {}
+    for key, targets in target_groups.items():
+        observations = observed_groups.get(key, [])
+        padded = observations + [("", {})] * max(0, len(targets) - len(observations))
+        costs = []
+        for target in targets:
+            row = []
+            for _, observed in padded:
+                if not observed:
+                    row.append(1e9)
+                    continue
+                dx = float(observed["position"][0]) - target["position"][0]
+                dy = float(observed["position"][1]) - target["position"][1]
+                dz = abs(float(observed["position"][2]) - target["position"][2])
+                yaw = angular_error(
+                    float(observed.get("yaw_rad", 0.0)), target["yaw_rad"],
+                    registry[target["type"]]["yaw_symmetry_deg"],
+                )
+                row.append(math.hypot(dx, dy) / xy_tol + dz / z_tol +
+                           yaw / math.radians(yaw_tol_deg))
+            costs.append(row)
+        for target, column in zip(targets, minimum_cost_assignment(costs)):
+            if column >= 0 and column < len(observations):
+                matched[target["id"]] = observations[column]
+
+    for target in manifest["target_blocks"]:
+        observed_id, observed = matched.get(target["id"], ("", None))
         if observed is None:
             item = {"id": target["id"], "success": False, "reason": "missing"}
         else:
@@ -244,6 +337,8 @@ def score_episode(manifest: dict, actual: dict, registry: dict | None = None,
             ok = xy <= xy_tol and abs(dz) <= z_tol and yaw_error <= math.radians(yaw_tol_deg)
             item = {"id": target["id"], "success": ok, "xy_error_m": xy,
                     "z_error_m": abs(dz), "yaw_error_deg": math.degrees(yaw_error)}
+            if observed_id != target["id"]:
+                item["observed_id"] = observed_id
         success = success and item["success"]
         per_block.append(item)
     return {"success": success, "placed": sum(x["success"] for x in per_block),

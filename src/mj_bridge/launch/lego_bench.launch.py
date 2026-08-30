@@ -20,6 +20,8 @@ def launch_setup(context):
     observation = LaunchConfiguration("observation").perform(context)
     connection_mode = LaunchConfiguration("connection_mode").perform(context)
     executor_mode = LaunchConfiguration("executor").perform(context)
+    vision_backend = LaunchConfiguration("vision_backend").perform(context)
+    foundationpose_root = LaunchConfiguration("foundationpose_root").perform(context)
     _, scene = generate(product, seed, output_dir)
 
     moveit_config = (
@@ -58,13 +60,15 @@ def launch_setup(context):
     }
     if observation == "rgbd" and common_env["MJ_BRIDGE_HEADLESS"].lower() == "true":
         common_env["MUJOCO_GL"] = "egl"
+    if observation == "rgbd" and executor_mode == "vision":
+        common_env["LEGO_BENCH_CAMERA_ON_DEMAND"] = "true"
 
     move_group = Node(
         package="moveit_ros_move_group", executable="move_group", output="screen",
         parameters=[moveit_config.to_dict(), controllers, {
             "moveit_manage_controllers": False,
-            "trajectory_execution.allowed_execution_duration_scaling": 3.0,
-            "trajectory_execution.allowed_goal_duration_margin": 5.0,
+            "trajectory_execution.allowed_execution_duration_scaling": 12.0,
+            "trajectory_execution.allowed_goal_duration_margin": 15.0,
             "trajectory_execution.allowed_start_tolerance": 0.05,
         }],
     )
@@ -79,7 +83,7 @@ def launch_setup(context):
     camera_tf = Node(
         package="tf2_ros", executable="static_transform_publisher", output="screen",
         arguments=[
-            "--x", "0.4", "--y", "0", "--z", "1.2",
+            "--x", "0.49", "--y", "-0.15", "--z", "1.2",
             "--qx", "1", "--qy", "0", "--qz", "0", "--qw", "0",
             "--frame-id", "world", "--child-frame-id", "realsense",
         ],
@@ -105,6 +109,27 @@ def launch_setup(context):
                 "plan_file": str(Path(output_dir).resolve() / "execution_plan.yaml"),
             }],
         ))
+    elif executor_mode == "vision":
+        if observation != "rgbd":
+            raise RuntimeError("executor:=vision requires observation:=rgbd")
+        executor_config = os.path.join(
+            get_package_share_directory("lego_executor"), "config", "executor.yaml"
+        )
+        nodes.append(Node(
+            package="mj_bridge", executable="lego-vision", name="lego_vision", output="screen",
+            parameters=[{
+                "backend": vision_backend,
+                "foundationpose_root": foundationpose_root,
+                "debug_dir": str(Path(output_dir).resolve() / "vision"),
+            }],
+        ))
+        nodes.append(Node(
+            package="lego_executor", executable="visual_moveit_executor",
+            name="visual_moveit_executor", output="screen",
+            parameters=[moveit_config.to_dict(), executor_config, {
+                "plan_file": str(Path(output_dir).resolve() / "execution_plan.yaml"),
+            }],
+        ))
     return nodes
 
 
@@ -118,5 +143,9 @@ def generate_launch_description():
         DeclareLaunchArgument("observation", default_value="oracle"),
         DeclareLaunchArgument("connection_mode", default_value="physics"),
         DeclareLaunchArgument("executor", default_value="none"),
+        DeclareLaunchArgument("vision_backend", default_value="foundationpose"),
+        DeclareLaunchArgument(
+            "foundationpose_root", default_value=os.environ.get("FOUNDATIONPOSE_DIR", "")
+        ),
         OpaqueFunction(function=launch_setup),
     ])

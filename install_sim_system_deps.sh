@@ -11,6 +11,7 @@ fi
 "${SUDO[@]}" apt-get install -y \
   python3-venv \
   python3-pip \
+  python3-opencv \
   python3-rosdep \
   python3-colcon-common-extensions \
   ros-humble-control-msgs \

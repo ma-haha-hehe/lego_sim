@@ -20,23 +20,26 @@ find_package(trajectory_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 add_executable(oracle_moveit_executor src/oracle_moveit_executor.cpp)
-target_compile_features(oracle_moveit_executor PUBLIC cxx_std_17)
-ament_target_dependencies(oracle_moveit_executor
-  control_msgs
-  geometry_msgs
-  moveit_msgs
-  moveit_ros_planning_interface
-  rclcpp
-  rclcpp_action
-  std_msgs
-  std_srvs
-  tf2
-  tf2_geometry_msgs
-  trajectory_msgs
-)
-target_link_libraries(oracle_moveit_executor yaml-cpp)
+add_executable(visual_moveit_executor src/oracle_moveit_executor.cpp)
+foreach(executor_target oracle_moveit_executor visual_moveit_executor)
+  target_compile_features(${executor_target} PUBLIC cxx_std_17)
+  ament_target_dependencies(${executor_target}
+    control_msgs
+    geometry_msgs
+    moveit_msgs
+    moveit_ros_planning_interface
+    rclcpp
+    rclcpp_action
+    std_msgs
+    std_srvs
+    tf2
+    tf2_geometry_msgs
+    trajectory_msgs
+  )
+  target_link_libraries(${executor_target} yaml-cpp)
+endforeach()
 
-install(TARGETS oracle_moveit_executor DESTINATION lib/${PROJECT_NAME})
+install(TARGETS oracle_moveit_executor visual_moveit_executor DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)

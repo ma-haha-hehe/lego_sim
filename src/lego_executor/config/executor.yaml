@@ -13,11 +13,55 @@ oracle_moveit_executor:
     place_press_depth_m: 0.001
     cartesian_speed_scale: 0.30
     lift_speed_scale: 0.55
+    transport_rotation_speed_scale: 0.30
+    transport_velocity_scale: 0.65
+    transport_acceleration_scale: 0.15
     gripper_open_m: 0.04
-    gripper_closed_m: 0.014
+    gripper_closed_m: 0.012
     gripper_duration_s: 0.35
     motion_settle_s: 0.10
     release_settle_s: 0.20
     grasp_confirmation_timeout_s: 5.0
-    tool_yaw_offset_deg: 45.0
+    # With the Panda hand pointing down, its closing axis is 90 degrees from
+    # the tool X axis. Zero offset therefore puts both pads parallel to the
+    # part sides instead of pinching two corners.
+    tool_yaw_offset_deg: 0.0
     verify_lift_m: 0.025
+    # Keep the tool axis on the estimated geometric centre of every part.
+    grasp_offset_xy: [0.0, 0.0]
+
+visual_moveit_executor:
+  ros__parameters:
+    source_mode: vision
+    auto_reset: true
+    wait_timeout_s: 30.0
+    planning_time_s: 6.0
+    planning_attempts: 2
+    velocity_scale: 0.90
+    acceleration_scale: 0.90
+    approach_height_m: 0.15
+    gripper_offset_m: 0.1234
+    grasp_descent_m: 0.170
+    # Match the grasp descent and add a small seating allowance.  This preserves
+    # the measured tool-to-part height without using simulator state.
+    place_descent_m: 0.1733
+    place_press_depth_m: 0.001
+    cartesian_speed_scale: 0.55
+    lift_speed_scale: 0.75
+    transport_rotation_speed_scale: 0.35
+    transport_velocity_scale: 0.70
+    transport_acceleration_scale: 0.15
+    gripper_open_m: 0.04
+    gripper_closed_m: 0.012
+    gripper_duration_s: 0.30
+    motion_settle_s: 0.08
+    release_settle_s: 0.15
+    tool_yaw_offset_deg: 0.0
+    perception_service: /lego_vision/detect
+    # Robot-side edge of the loose-part workspace at the hardware pipeline's
+    # observation height. The offset leaves the overhead camera view clear.
+    observe_pose_xyz: [0.45, -0.35, 0.50]
+    observe_yaw_deg: 45.0
+    # Vision returns the part centre; do not bias the grasp toward an edge.
+    grasp_offset_xy: [0.0, 0.0]
+    place_offset_xy: [0.0, 0.0]

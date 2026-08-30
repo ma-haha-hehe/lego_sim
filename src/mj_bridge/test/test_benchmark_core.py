@@ -48,6 +48,25 @@ def test_perfect_target_state_scores_success():
     assert result["completion"] == 1.0
 
 
+def test_visually_identical_parts_are_scored_as_interchangeable():
+    product = normalize_product({"blocks": [
+        {"name": "left", "type": "brick_2x2", "color": "blue", "pos": [-0.016, 0, 0]},
+        {"name": "right", "type": "brick_2x2", "color": "blue", "pos": [0.016, 0, 0]},
+    ]})
+    episode = generate_episode(product, seed=3)
+    left, right = episode["target_blocks"]
+    actual = {"blocks": {
+        "left": {"type": "brick_2x2", "color": "blue",
+                 "position": right["position"], "yaw_rad": right["yaw_rad"]},
+        "right": {"type": "brick_2x2", "color": "blue",
+                  "position": left["position"], "yaw_rad": left["yaw_rad"]},
+    }}
+    result = score_episode(episode, actual)
+    assert result["success"] is True
+    assert result["placed"] == 2
+    assert {item.get("observed_id") for item in result["blocks"]} == {"left", "right"}
+
+
 def test_legacy_radians_are_normalized_to_degrees():
     product = normalize_product({"blocks": [{
         "name": "2x2_test", "type": "brick_2x2", "pos": [0, 0, 0],
@@ -259,3 +278,43 @@ def test_snap_grasp_aligns_visual_and_collision_center_between_fingers():
         assert np.linalg.norm(
             block_collision_center_world(data, body_id) - grasp_center_world(model, data)
         ) < 1e-9
+
+
+def test_gripper_pads_and_parts_use_high_friction_contact_surfaces():
+    product = normalize_product({"blocks": [
+        {"name": "test_block", "type": "brick_2x2", "pos": [0, 0, 0]},
+    ]})
+    with tempfile.TemporaryDirectory() as directory:
+        directory = Path(directory)
+        product_file = directory / "product.yaml"
+        product_file.write_text(yaml.safe_dump(product), encoding="utf-8")
+        episode, scene = generate_files(str(product_file), 8, str(directory / "run"))
+        model = mujoco.MjModel.from_xml_path(str(scene))
+
+        for finger_name in ("left_finger", "right_finger"):
+            body_id = mujoco.mj_name2id(
+                model, mujoco.mjtObj.mjOBJ_BODY, finger_name
+            )
+            geom_ids = np.flatnonzero(model.geom_bodyid == body_id)
+            pad_ids = [
+                geom_id for geom_id in geom_ids
+                if int(model.geom_type[geom_id]) == mujoco.mjtGeom.mjGEOM_BOX
+            ]
+            assert len(pad_ids) == 5
+            assert all(int(model.geom_condim[geom_id]) == 6 for geom_id in pad_ids)
+            assert all(
+                np.all(model.geom_friction[geom_id] >= [8.0, 0.5, 0.05])
+                for geom_id in pad_ids
+            )
+
+        block_id = mujoco.mj_name2id(
+            model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            episode["spawned_blocks"][0]["body_name"],
+        )
+        block_geom_ids = np.flatnonzero(model.geom_bodyid == block_id)
+        assert block_geom_ids.size > 0
+        assert all(
+            np.all(model.geom_friction[geom_id] >= [7.0, 0.4, 0.04])
+            for geom_id in block_geom_ids
+        )

@@ -161,9 +161,11 @@ RUN_DIR = os.environ.get("LEGO_BENCH_RUN_DIR", "")
 
 # ============================================================
 
-SIM_SUBSTEPS = 5
+SIM_SUBSTEPS = 8
 LOOP_DT = 0.016
 GRASP_CONTACT_HOLD_S = 0.05
+GRASP_AIRBORNE_SETTLE_S = 0.20
+GRASP_MAX_TOOL_TILT_DEG = 3.0
 ARM_GOAL_TOLERANCE_RAD = 0.010
 
 
@@ -235,6 +237,7 @@ class MuJoCoActionServer(Node):
         self.model = mujoco.MjModel.from_xml_path(MODEL_XML_PATH)
         self.data = mujoco.MjData(self.model)
         self.mj_lock = threading.RLock()
+        self.simulation_loop_ready = threading.Event()
 
         # ====================================================
 
@@ -293,8 +296,9 @@ class MuJoCoActionServer(Node):
         self.trajectory = None
         self.active_joint_names = []
 
-        self.traj_start_wall_time = 0.0
+        self.traj_start_sim_time = 0.0
         self.traj_duration = 0.0
+        self._last_arm_settle_log = 0.0
         self.is_executing = False
         self.cancel_requested = False
 
@@ -312,7 +316,7 @@ class MuJoCoActionServer(Node):
         self.gripper_goal_value = GRIPPER_OPEN_VALUE
 
 
-        self.gripper_start_time = 0.0
+        self.gripper_start_sim_time = 0.0
 
 
         self.gripper_duration = 1.0
@@ -325,6 +329,17 @@ class MuJoCoActionServer(Node):
         self.grasp_contact_body = None
         self.grasp_contact_since = None
         self._last_grasp_wait_log = 0.0
+        self.grasp_reference_offset = None
+        self.grasp_reference_rotation = None
+        self.active_grasp_max_translation_slip = 0.0
+        self.active_grasp_translation_delta_at_max = np.zeros(3, dtype=float)
+        self.active_grasp_max_rotation_slip_deg = 0.0
+        self.active_grasp_last_logged_slip = 0.0
+        self.grasp_airborne_started = False
+        self.grasp_airborne_finished = False
+        self.grasp_airborne_since = None
+        self.grasp_translation_slip_by_body = {}
+        self.grasp_rotation_slip_by_body = {}
 
         # ====================================================
 
@@ -364,13 +379,22 @@ class MuJoCoActionServer(Node):
 
         self.benchmark_pub = self.create_publisher(String, "/mj_bridge/benchmark_state", 10)
         self.goal_pub = self.create_publisher(String, "/lego_bench/goal", 10)
-        self.oracle_pub = self.create_publisher(String, "/lego_bench/ground_truth", 10)
+        self.observation_mode = os.environ.get("LEGO_BENCH_OBSERVATION", "oracle")
+        self.oracle_pub = (
+            self.create_publisher(String, "/lego_bench/ground_truth", 10)
+            if self.observation_mode == "oracle" else None
+        )
         self.benchmark_timer = self.create_timer(0.05, self.update_benchmark_state)
         self.reset_service = self.create_service(Trigger, "/mj_bridge/reset", self.handle_reset)
         self.result_service = self.create_service(Trigger, "/mj_bridge/result", self.handle_result)
-        self.observation_mode = os.environ.get("LEGO_BENCH_OBSERVATION", "oracle")
         self.connection_mode = os.environ.get("LEGO_BENCH_CONNECTION_MODE", "physics")
         self.camera_renderer = None
+        self.camera_on_demand = os.environ.get(
+            "LEGO_BENCH_CAMERA_ON_DEMAND", "false"
+        ).lower() in ("1", "true", "yes")
+        self.camera_request_lock = threading.Lock()
+        self.camera_capture_requested = 0
+        self.camera_capture_completed = 0
         if self.observation_mode == "rgbd":
             self.init_virtual_camera()
 
@@ -409,17 +433,46 @@ class MuJoCoActionServer(Node):
             self.get_logger().info(f"Connection mode: {self.connection_mode}")
 
     def init_virtual_camera(self):
-        self.camera_width = 320
-        self.camera_height = 240
+        self.camera_width = 960
+        self.camera_height = 720
+        self.camera_fovy = 45.0
         self.camera_renderer = mujoco.Renderer(
             self.model, height=self.camera_height, width=self.camera_width
         )
         self.rgb_pub = self.create_publisher(Image, "/camera/color/image_raw", 5)
         self.depth_pub = self.create_publisher(Image, "/camera/depth/image_raw", 5)
-        self.segmentation_pub = self.create_publisher(Image, "/camera/segmentation", 5)
         self.camera_info_pub = self.create_publisher(CameraInfo, "/camera/camera_info", 5)
+        self.capture_service = self.create_service(
+            Trigger, "/mj_bridge/capture_rgbd", self.handle_capture_rgbd
+        )
         self._last_camera_publish = 0.0
-        self.get_logger().info("RGB-D observation enabled on /camera/*")
+        mode = "on demand" if self.camera_on_demand else "continuous"
+        self.get_logger().info(f"RGB-D observation enabled on /camera/* ({mode})")
+
+    def handle_capture_rgbd(self, request, response):
+        """Queue one RGB-D frame without rendering in the ROS callback thread."""
+        del request
+        if self.camera_renderer is None:
+            response.success = False
+            response.message = "RGB-D observation is disabled"
+            return response
+        with self.camera_request_lock:
+            self.camera_capture_requested += 1
+            capture_id = self.camera_capture_requested
+        response.success = True
+        response.message = f"RGB-D capture {capture_id} queued"
+        return response
+
+    def pending_camera_capture(self):
+        """Return the newest pending capture ID when the robot is stationary."""
+        with self.camera_request_lock:
+            if self.camera_capture_requested <= self.camera_capture_completed:
+                return None
+            capture_id = self.camera_capture_requested
+        with self.mj_lock:
+            if self.is_executing or self.gripper_moving:
+                return None
+        return capture_id
 
     def _image_message(self, array, encoding):
         msg = Image()
@@ -432,9 +485,10 @@ class MuJoCoActionServer(Node):
         msg.data = np.ascontiguousarray(array).tobytes()
         return msg
 
-    def publish_virtual_camera(self):
+    def publish_virtual_camera(self, capture_id=None):
         if self.camera_renderer is None:
             return
+        started = time.perf_counter()
         with self.mj_lock:
             self.camera_renderer.update_scene(self.data, camera="realsense")
             rgb = self.camera_renderer.render().copy()
@@ -442,18 +496,13 @@ class MuJoCoActionServer(Node):
             self.camera_renderer.update_scene(self.data, camera="realsense")
             depth = self.camera_renderer.render().astype(np.float32).copy()
             self.camera_renderer.disable_depth_rendering()
-            self.camera_renderer.enable_segmentation_rendering()
-            self.camera_renderer.update_scene(self.data, camera="realsense")
-            segmentation = self.camera_renderer.render().astype(np.int32).copy()
-            self.camera_renderer.disable_segmentation_rendering()
         self.rgb_pub.publish(self._image_message(rgb, "rgb8"))
         self.depth_pub.publish(self._image_message(depth, "32FC1"))
-        self.segmentation_pub.publish(self._image_message(segmentation, "32SC2"))
         info = CameraInfo()
         info.header.stamp = self.get_clock().now().to_msg()
         info.header.frame_id = "realsense"
         info.width, info.height = self.camera_width, self.camera_height
-        fy = self.camera_height / (2.0 * math.tan(math.radians(60.0) / 2.0))
+        fy = self.camera_height / (2.0 * math.tan(math.radians(self.camera_fovy) / 2.0))
         fx = fy
         cx, cy = self.camera_width / 2.0, self.camera_height / 2.0
         info.k = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
@@ -461,6 +510,15 @@ class MuJoCoActionServer(Node):
         info.distortion_model = "plumb_bob"
         info.d = [0.0] * 5
         self.camera_info_pub.publish(info)
+        if capture_id is not None:
+            with self.camera_request_lock:
+                self.camera_capture_completed = max(
+                    self.camera_capture_completed, capture_id
+                )
+            self.get_logger().info(
+                f"Published requested RGB-D frame {capture_id} in "
+                f"{time.perf_counter() - started:.3f}s"
+            )
 
     def load_benchmark_config(self):
         defaults = {
@@ -468,6 +526,8 @@ class MuJoCoActionServer(Node):
             "lift_height_m": 0.05,
             "hold_time_s": 0.5,
             "max_episode_time_s": 30.0,
+            "grasp_translation_slip_tolerance_m": 0.002,
+            "grasp_rotation_slip_tolerance_deg": 3.0,
         }
         if not os.path.exists(BENCHMARK_CONFIG_PATH):
             self.get_logger().warn(f"Benchmark configuration not found: {BENCHMARK_CONFIG_PATH}")
@@ -485,6 +545,17 @@ class MuJoCoActionServer(Node):
         self.grasp_contact_body = None
         self.grasp_contact_since = None
         self._last_grasp_wait_log = 0.0
+        self.grasp_reference_offset = None
+        self.grasp_reference_rotation = None
+        self.active_grasp_max_translation_slip = 0.0
+        self.active_grasp_translation_delta_at_max = np.zeros(3, dtype=float)
+        self.active_grasp_max_rotation_slip_deg = 0.0
+        self.active_grasp_last_logged_slip = 0.0
+        self.grasp_airborne_started = False
+        self.grasp_airborne_finished = False
+        self.grasp_airborne_since = None
+        self.grasp_translation_slip_by_body = {}
+        self.grasp_rotation_slip_by_body = {}
         if self.episode_manifest:
             self.target_body_id = -1
             self.episode_start_time = time.monotonic()
@@ -505,13 +576,29 @@ class MuJoCoActionServer(Node):
     def benchmark_result(self):
         with self.mj_lock:
             if self.episode_manifest:
+                current_state = self.current_block_state()
                 scored = score_episode(
                     self.episode_manifest,
-                    self.current_block_state(),
+                    current_state,
                     xy_tol=float(self.benchmark_config.get("position_tolerance_xy_m", 0.006)),
                     z_tol=float(self.benchmark_config.get("position_tolerance_z_m", 0.004)),
                     yaw_tol_deg=float(self.benchmark_config.get("yaw_tolerance_deg", 8.0)),
                 )
+                max_translation_slip = max(
+                    self.grasp_translation_slip_by_body.values(), default=0.0
+                )
+                max_rotation_slip = max(
+                    self.grasp_rotation_slip_by_body.values(), default=0.0
+                )
+                grasp_stable = (
+                    max_translation_slip <= float(self.benchmark_config.get(
+                        "grasp_translation_slip_tolerance_m", 0.002
+                    )) and
+                    max_rotation_slip <= float(self.benchmark_config.get(
+                        "grasp_rotation_slip_tolerance_deg", 3.0
+                    ))
+                )
+                scored["success"] = bool(scored["success"] and grasp_stable)
                 scored.update({
                     "episode_id": self.episode_manifest["episode_id"],
                     "seed": self.episode_manifest["seed"],
@@ -521,6 +608,21 @@ class MuJoCoActionServer(Node):
                     "stability_violations": self.stability_violations,
                     "observation_mode": self.observation_mode,
                     "connection_mode": self.connection_mode,
+                    "grasped_block": current_state["grasped_block"],
+                    "grasp_stable": grasp_stable,
+                    "max_grasp_translation_slip_m": max_translation_slip,
+                    "max_grasp_rotation_slip_deg": max_rotation_slip,
+                    "grasp_slip_by_block": {
+                        item["id"]: {
+                            "translation_m": self.grasp_translation_slip_by_body.get(
+                                item["body_name"], 0.0
+                            ),
+                            "rotation_deg": self.grasp_rotation_slip_by_body.get(
+                                item["body_name"], 0.0
+                            ),
+                        }
+                        for item in self.episode_manifest["spawned_blocks"]
+                    },
                 })
                 return scored
             current_z = None
@@ -648,9 +750,10 @@ class MuJoCoActionServer(Node):
 
     def publish_public_state(self, result=None):
         state = self.current_block_state()
-        oracle = String()
-        oracle.data = json.dumps(state, ensure_ascii=False)
-        self.oracle_pub.publish(oracle)
+        if self.oracle_pub is not None:
+            oracle = String()
+            oracle.data = json.dumps(state, ensure_ascii=False)
+            self.oracle_pub.publish(oracle)
         goal = String()
         goal.data = json.dumps({
             "episode_id": self.episode_manifest["episode_id"],
@@ -664,6 +767,10 @@ class MuJoCoActionServer(Node):
 
     def handle_reset(self, request, response):
         del request
+        if not self.simulation_loop_ready.wait(timeout=30.0):
+            response.success = False
+            response.message = "Simulation loop did not become ready"
+            return response
         with self.mj_lock:
             self.data.qpos[:] = self.episode_initial_qpos
             self.data.qvel[:] = self.episode_initial_qvel
@@ -795,7 +902,7 @@ class MuJoCoActionServer(Node):
         with self.mj_lock:
             self.trajectory = traj
             self.active_joint_names = joint_names
-            self.traj_start_wall_time = time.time()
+            self.traj_start_sim_time = float(self.data.time)
             self.traj_duration = duration
             self.is_executing = True
             self.cancel_requested = False
@@ -805,8 +912,8 @@ class MuJoCoActionServer(Node):
             f"points={len(traj.points)}, duration={duration:.3f}s"
         )
 
-        timeout = duration * 3.0 + 5.0
-        start_wait = time.time()
+        timeout = duration * 12.0 + 15.0
+        start_wait = time.monotonic()
 
         while rclpy.ok():
             with self.mj_lock:
@@ -820,7 +927,7 @@ class MuJoCoActionServer(Node):
             if not executing:
                 break
 
-            if time.time() - start_wait > timeout:
+            if time.monotonic() - start_wait > timeout:
                 self.get_logger().error(f"Arm trajectory timed out after {timeout:.3f}s")
                 with self.mj_lock:
                     self.is_executing = False
@@ -870,7 +977,7 @@ class MuJoCoActionServer(Node):
 
             self.gripper_start_value = self.gripper_target
             self.gripper_goal_value = cmd_val
-            self.gripper_start_time = time.time()
+            self.gripper_start_sim_time = float(self.data.time)
             self.gripper_duration = duration
             self.gripper_moving = True
 
@@ -889,8 +996,8 @@ class MuJoCoActionServer(Node):
 
 
 
-        start_wait = time.time()
-        timeout = duration + 3.0
+        start_wait = time.monotonic()
+        timeout = duration * 12.0 + 5.0
 
         while rclpy.ok():
             with self.mj_lock:
@@ -899,7 +1006,7 @@ class MuJoCoActionServer(Node):
             if not moving:
                 break
 
-            if time.time() - start_wait > timeout:
+            if time.monotonic() - start_wait > timeout:
                 self.get_logger().error("Gripper action timed out")
                 goal_handle.abort()
                 return FollowJointTrajectory.Result()
@@ -919,7 +1026,7 @@ class MuJoCoActionServer(Node):
             if not self.gripper_moving:
                 return
 
-            elapsed = time.time() - self.gripper_start_time
+            elapsed = float(self.data.time) - self.gripper_start_sim_time
             alpha = elapsed / self.gripper_duration
             alpha = max(0.0, min(1.0, alpha))
 
@@ -947,7 +1054,26 @@ class MuJoCoActionServer(Node):
             if not self.is_executing or self.trajectory is None:
                 return
 
-            t_rel = time.time() - self.traj_start_wall_time
+            # A carried part regaining non-gripper support means the vertical
+            # placement stroke has reached the product or base plate. Stop the
+            # servo at first physical contact instead of forcing the arm
+            # through the assembled geometry while it chases the nominal end
+            # point.
+            if self.grasped_block is not None and self.grasp_airborne_finished:
+                for name in self.active_joint_names:
+                    if name in self.joint_qpos_addr:
+                        qadr = self.joint_qpos_addr[name]
+                        self.target_qpos[qadr] = self.data.qpos[qadr]
+                self.is_executing = False
+                self.get_logger().info(
+                    f"[PLACE_CONTACT_STOP] {self.grasped_block}, "
+                    "support_contact=true"
+                )
+                return
+
+            # Use simulated time so a loaded host cannot skip trajectory
+            # segments and inject large position-target discontinuities.
+            t_rel = float(self.data.time) - self.traj_start_sim_time
             points = self.trajectory.points
 
             if not points:
@@ -969,6 +1095,16 @@ class MuJoCoActionServer(Node):
                     ))
                 if not errors or max(errors) <= ARM_GOAL_TOLERANCE_RAD:
                     self.is_executing = False
+                else:
+                    now = time.monotonic()
+                    if now - self._last_arm_settle_log >= 1.0:
+                        worst_index = int(np.argmax(errors))
+                        self.get_logger().info(
+                            "[ARM_SETTLING] max_joint_error="
+                            f"{errors[worst_index]:.4f}rad, "
+                            f"joint={self.active_joint_names[worst_index]}"
+                        )
+                        self._last_arm_settle_log = now
                 return
 
             idx = 0
@@ -1491,11 +1627,18 @@ class MuJoCoActionServer(Node):
         if not self.episode_manifest:
             return
         with self.mj_lock:
-            if self.gripper_mode == "open":
+            if self.gripper_mode in {"open", "opening"}:
                 self.grasp_contact_body = None
                 self.grasp_contact_since = None
                 if self.grasped_block is not None:
                     released = self.grasped_block
+                    self.update_grasp_slip_locked()
+                    self.grasp_translation_slip_by_body[released] = (
+                        self.active_grasp_max_translation_slip
+                    )
+                    self.grasp_rotation_slip_by_body[released] = (
+                        self.active_grasp_max_rotation_slip_deg
+                    )
                     if self.connection_mode == "snap":
                         self.fake_welds = [
                             weld for weld in self.fake_welds
@@ -1503,17 +1646,38 @@ class MuJoCoActionServer(Node):
                         ]
                         self.welded_pairs.discard(("hand", released))
                     self.grasped_block = None
-                    self.get_logger().info(f"[GRASP_RELEASE] {released}")
+                    self.get_logger().info(
+                        f"[GRASP_RELEASE] {released}, "
+                        f"max_airborne_translation_slip="
+                        f"{self.active_grasp_max_translation_slip:.4f}m, "
+                        f"delta_at_max=("
+                        f"{self.active_grasp_translation_delta_at_max[0]:+.4f}, "
+                        f"{self.active_grasp_translation_delta_at_max[1]:+.4f}, "
+                        f"{self.active_grasp_translation_delta_at_max[2]:+.4f})m, "
+                        f"max_airborne_rotation_slip="
+                        f"{self.active_grasp_max_rotation_slip_deg:.2f}deg"
+                    )
+                    self.grasp_reference_offset = None
+                    self.grasp_reference_rotation = None
                     if self.connection_mode == "snap":
                         self.settle_released_block(released)
                 return
-            if (self.gripper_mode not in {"closing", "close_hold"} or
-                    self.grasped_block is not None):
+            if self.grasped_block is not None:
+                self.update_grasp_slip_locked()
+                return
+            if self.gripper_mode not in {"closing", "close_hold"}:
                 return
 
             grasp_center = grasp_center_world(self.model, self.data)
             if grasp_center is None:
                 return
+            hand_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, "hand"
+            )
+            hand_rotation = self.data.xmat[hand_id].reshape(3, 3)
+            tool_tilt_deg = float(np.degrees(np.arccos(np.clip(
+                -hand_rotation[2, 2], -1.0, 1.0
+            ))))
             candidates = []
             observed = []
             for item in self.episode_manifest["spawned_blocks"]:
@@ -1536,7 +1700,8 @@ class MuJoCoActionServer(Node):
                 ))
                 if (left_contact and right_contact and distance <= 0.020 and
                         planar <= 0.012 and vertical <= 0.018 and upright_z >= 0.7):
-                    candidates.append((distance, item["body_name"]))
+                    if tool_tilt_deg <= GRASP_MAX_TOOL_TILT_DEG:
+                        candidates.append((distance, item["body_name"]))
             if not candidates:
                 self.grasp_contact_body = None
                 self.grasp_contact_since = None
@@ -1554,6 +1719,7 @@ class MuJoCoActionServer(Node):
                         f"right_contact={str(right).lower()}, "
                         f"distance={distance:.4f}m, planar={planar:.4f}m, "
                         f"vertical={vertical:.4f}m, "
+                        f"tool_tilt={tool_tilt_deg:.2f}deg, "
                         f"fingers=({finger_positions[0]:.4f}, "
                         f"{finger_positions[1]:.4f})m"
                     )
@@ -1575,6 +1741,18 @@ class MuJoCoActionServer(Node):
                 block_collision_center_world(self.data, body_id) - grasp_center
             ))
             self.grasped_block = body_name
+            block_rotation = self.data.xmat[body_id].reshape(3, 3)
+            self.grasp_reference_offset = hand_rotation.T @ (
+                block_collision_center_world(self.data, body_id) - grasp_center
+            )
+            self.grasp_reference_rotation = hand_rotation.T @ block_rotation
+            self.active_grasp_max_translation_slip = 0.0
+            self.active_grasp_translation_delta_at_max = np.zeros(3, dtype=float)
+            self.active_grasp_max_rotation_slip_deg = 0.0
+            self.active_grasp_last_logged_slip = 0.0
+            self.grasp_airborne_started = False
+            self.grasp_airborne_finished = False
+            self.grasp_airborne_since = None
             contact_time = now - self.grasp_contact_since
             if self.connection_mode == "snap":
                 self.create_fake_weld("hand", body_name)
@@ -1584,8 +1762,88 @@ class MuJoCoActionServer(Node):
                 event = "GRASP_PHYSICS_CONFIRMED"
             self.get_logger().info(
                 f"[{event}] {body_name}, dual_finger_contact=true, "
-                f"contact_time={contact_time:.3f}s, center_error={correction:.4f}m"
+                f"contact_time={contact_time:.3f}s, center_error={correction:.4f}m, "
+                f"tool_tilt={tool_tilt_deg:.2f}deg, "
+                f"center_delta=({self.grasp_reference_offset[0]:+.4f}, "
+                f"{self.grasp_reference_offset[1]:+.4f}, "
+                f"{self.grasp_reference_offset[2]:+.4f})m"
             )
+
+    def update_grasp_slip_locked(self):
+        """Measure part motion relative to the hand while a physical grasp is active."""
+        if (self.grasped_block is None or self.grasp_reference_offset is None or
+                self.grasp_reference_rotation is None):
+            return
+        hand_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "hand"
+        )
+        body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, self.grasped_block
+        )
+        if min(hand_id, body_id) < 0:
+            return
+        grasp_center = grasp_center_world(self.model, self.data)
+        if grasp_center is None:
+            return
+        hand_rotation = self.data.xmat[hand_id].reshape(3, 3)
+        block_rotation = self.data.xmat[body_id].reshape(3, 3)
+        current_offset = hand_rotation.T @ (
+            block_collision_center_world(self.data, body_id) - grasp_center
+        )
+        finger_ids = {
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
+            for name in ("hand", "left_finger", "right_finger")
+        }
+        support_contact = False
+        for index in range(self.data.ncon):
+            contact = self.data.contact[index]
+            body1 = int(self.model.geom_bodyid[contact.geom1])
+            body2 = int(self.model.geom_bodyid[contact.geom2])
+            if body1 == body_id and body2 not in finger_ids:
+                support_contact = True
+                break
+            if body2 == body_id and body1 not in finger_ids:
+                support_contact = True
+                break
+        if support_contact:
+            if self.grasp_airborne_started:
+                self.grasp_airborne_finished = True
+            else:
+                self.grasp_airborne_since = None
+            return
+        if self.grasp_airborne_finished:
+            return
+        if not self.grasp_airborne_started:
+            if self.grasp_airborne_since is None:
+                self.grasp_airborne_since = float(self.data.time)
+                return
+            if float(self.data.time) - self.grasp_airborne_since < GRASP_AIRBORNE_SETTLE_S:
+                return
+            self.grasp_reference_offset = current_offset.copy()
+            self.grasp_reference_rotation = hand_rotation.T @ block_rotation
+            self.grasp_airborne_started = True
+            return
+        translation_delta = current_offset - self.grasp_reference_offset
+        translation_slip = float(np.linalg.norm(translation_delta))
+        current_rotation = hand_rotation.T @ block_rotation
+        rotation_delta = self.grasp_reference_rotation.T @ current_rotation
+        cosine = float(np.clip((np.trace(rotation_delta) - 1.0) / 2.0, -1.0, 1.0))
+        rotation_slip_deg = float(np.degrees(np.arccos(cosine)))
+        if translation_slip > self.active_grasp_max_translation_slip:
+            self.active_grasp_max_translation_slip = translation_slip
+            self.active_grasp_translation_delta_at_max = translation_delta.copy()
+            if translation_slip - self.active_grasp_last_logged_slip >= 0.0005:
+                self.get_logger().info(
+                    f"[GRASP_SLIP_MAX] {self.grasped_block}, "
+                    f"translation={translation_slip:.4f}m, "
+                    f"delta=({translation_delta[0]:+.4f}, "
+                    f"{translation_delta[1]:+.4f}, "
+                    f"{translation_delta[2]:+.4f})m"
+                )
+                self.active_grasp_last_logged_slip = translation_slip
+        self.active_grasp_max_rotation_slip_deg = max(
+            self.active_grasp_max_rotation_slip_deg, rotation_slip_deg
+        )
 
     def maintain_fake_welds(self):
         """Maintain relative transforms created by the simplified snap model."""
@@ -1681,42 +1939,55 @@ def main():
         ros_thread.start()
 
         def run_loop(viewer=None):
-            while rclpy.ok() and (viewer is None or viewer.is_running()):
-                loop_start = time.time()
+            node.simulation_loop_ready.set()
+            node.get_logger().info("Simulation and controller loop is ready")
+            try:
+                while rclpy.ok() and (viewer is None or viewer.is_running()):
+                    loop_start = time.time()
 
 
-                node.update_action_state()
+                    node.update_action_state()
 
 
-                node.update_gripper_target()
+                    node.update_gripper_target()
 
-                for _ in range(SIM_SUBSTEPS):
-                    node.step_pid()
+                    for _ in range(SIM_SUBSTEPS):
+                        node.step_pid()
 
-                    node.update_grasp_constraint()
+                        node.update_grasp_constraint()
 
 
-                    if node.connection_mode == "snap":
-                        node.auto_weld_touching_bricks()
-                        node.maintain_fake_welds()
+                        if node.connection_mode == "snap":
+                            node.auto_weld_touching_bricks()
+                            node.maintain_fake_welds()
 
-                node.update_safety_metrics()
+                    node.update_safety_metrics()
 
-                # MuJoCo's EGL context is thread-affine. Render on the same main
-                # thread that created the renderer, at a bounded 10 Hz rate.
-                if (node.camera_renderer is not None
-                        and time.monotonic() - node._last_camera_publish >= 0.1):
-                    node.publish_virtual_camera()
-                    node._last_camera_publish = time.monotonic()
+                    # MuJoCo's OpenGL context is thread-affine, so rendering
+                    # stays on this thread. The visual executor requests one
+                    # fresh frame only after reaching its stationary observation
+                    # pose. Other RGB-D clients retain the regular stream by
+                    # leaving on-demand mode disabled.
+                    if node.camera_renderer is not None:
+                        capture_id = node.pending_camera_capture()
+                        if capture_id is not None:
+                            node.publish_virtual_camera(capture_id)
+                            node._last_camera_publish = time.monotonic()
+                        elif (not node.camera_on_demand and
+                                time.monotonic() - node._last_camera_publish >= 0.5):
+                            node.publish_virtual_camera()
+                            node._last_camera_publish = time.monotonic()
 
-                if viewer is not None:
-                    viewer.sync()
+                    if viewer is not None:
+                        viewer.sync()
 
-                elapsed = time.time() - loop_start
-                sleep_time = LOOP_DT - elapsed
+                    elapsed = time.time() - loop_start
+                    sleep_time = LOOP_DT - elapsed
 
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+            finally:
+                node.simulation_loop_ready.clear()
 
         if os.environ.get("MJ_BRIDGE_HEADLESS", "0").lower() in ("1", "true", "yes"):
             node.get_logger().info("Running in headless mode")
@@ -1729,16 +2000,19 @@ def main():
         pass
 
     finally:
-        if executor is not None:
-            executor.shutdown()
+        try:
+            if executor is not None:
+                executor.shutdown()
 
-        if node is not None:
-            if node.camera_renderer is not None:
-                node.camera_renderer.close()
-            node.destroy_node()
+            if node is not None:
+                if node.camera_renderer is not None:
+                    node.camera_renderer.close()
+                node.destroy_node()
 
-        if rclpy.ok():
-            rclpy.shutdown()
+            if rclpy.ok():
+                rclpy.shutdown()
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

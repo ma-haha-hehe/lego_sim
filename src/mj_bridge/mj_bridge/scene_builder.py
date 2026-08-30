@@ -83,7 +83,11 @@ DENSITY = 150
 
 
 
-FRICTION = "5.0 0.2 0.02"
+# Sliding, torsional and rolling friction for the ABS-like part surfaces.
+# The values are paired with the rubber fingertip pads in panda.xml and keep a
+# physically grasped part from creeping during fast transfer motions.
+BRICK_FRICTION = "7.0 0.4 0.04"
+SUPPORT_FRICTION = "5.0 0.2 0.02"
 
 
 
@@ -265,7 +269,7 @@ def local_to_world(block_pos, yaml_parts_center) -> np.ndarray:
 def set_common_collision_params(geom: ET.Element, density: float | None = None) -> None:
     """Apply shared contact parameters to a collision geometry."""
     geom.set("rgba", "0 0 0 0")
-    geom.set("friction", FRICTION)
+    geom.set("friction", BRICK_FRICTION)
     geom.set("solref", SOLREF)
     geom.set("solimp", SOLIMP)
 
@@ -389,7 +393,7 @@ def create_assembly_base_plate() -> ET.Element:
         f"{BASE_PLATE_HALF_X:.4f} {BASE_PLATE_HALF_Y:.4f} {BASE_PLATE_HALF_HEIGHT:.4f}",
     )
     geom_base.set("rgba", "0.12 0.12 0.12 1")
-    geom_base.set("friction", FRICTION)
+    geom_base.set("friction", SUPPORT_FRICTION)
     geom_base.set("solref", SOLREF)
     geom_base.set("solimp", SOLIMP)
 
@@ -414,7 +418,7 @@ def create_assembly_base_plate() -> ET.Element:
                 f"{x:.4f} {y:.4f} {BASE_STUD_CENTER_Z_LOCAL:.4f}",
             )
             geom_stud.set("rgba", "0.12 0.12 0.12 1")
-            geom_stud.set("friction", FRICTION)
+            geom_stud.set("friction", SUPPORT_FRICTION)
             geom_stud.set("solref", SOLREF)
             geom_stud.set("solimp", SOLIMP)
 
@@ -621,7 +625,8 @@ def build(
     print(f"collision z offset: {COLLISION_Z_OFFSET}")
     print(f"brick body half height: {BRICK_BODY_HALF_HEIGHT}")
     print(f"stud radius: {STUD_RADIUS}")
-    print(f"friction: {FRICTION}")
+    print(f"brick friction: {BRICK_FRICTION}")
+    print(f"support friction: {SUPPORT_FRICTION}")
     print(f"solref: {SOLREF}")
     print(f"solimp: {SOLIMP}")
 
