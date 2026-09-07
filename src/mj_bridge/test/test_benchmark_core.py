@@ -280,7 +280,7 @@ def test_snap_grasp_aligns_visual_and_collision_center_between_fingers():
         ) < 1e-9
 
 
-def test_gripper_pads_and_parts_use_high_friction_contact_surfaces():
+def test_rubber_gripper_pads_have_more_friction_than_abs_parts():
     product = normalize_product({"blocks": [
         {"name": "test_block", "type": "brick_2x2", "pos": [0, 0, 0]},
     ]})
@@ -303,7 +303,7 @@ def test_gripper_pads_and_parts_use_high_friction_contact_surfaces():
             assert len(pad_ids) == 5
             assert all(int(model.geom_condim[geom_id]) == 6 for geom_id in pad_ids)
             assert all(
-                np.all(model.geom_friction[geom_id] >= [8.0, 0.5, 0.05])
+                np.all(model.geom_friction[geom_id] >= [12.0, 1.0, 0.10])
                 for geom_id in pad_ids
             )
 
@@ -315,6 +315,13 @@ def test_gripper_pads_and_parts_use_high_friction_contact_surfaces():
         block_geom_ids = np.flatnonzero(model.geom_bodyid == block_id)
         assert block_geom_ids.size > 0
         assert all(
-            np.all(model.geom_friction[geom_id] >= [7.0, 0.4, 0.04])
+            np.allclose(
+                model.geom_friction[geom_id], [1.5, 0.05, 0.005], atol=1e-9
+            )
+            for geom_id in block_geom_ids
+        )
+        assert all(
+            model.geom_friction[geom_id, 0]
+            < model.geom_friction[pad_ids[0], 0]
             for geom_id in block_geom_ids
         )

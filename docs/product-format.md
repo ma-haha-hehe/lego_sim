@@ -10,11 +10,11 @@ blocks:
   - id: left_support
     type: brick_2x2
     color: blue
-    target: {position: [-0.016, 0.0, 0.0], yaw_deg: 0}
+    target: {position: [-0.032, 0.0, 0.0], yaw_deg: 0}
   - id: right_support
     type: brick_2x2
     color: blue
-    target: {position: [0.016, 0.0, 0.0], yaw_deg: 0}
+    target: {position: [0.032, 0.0, 0.0], yaw_deg: 0}
   - id: top_beam
     type: brick_4x2
     color: white

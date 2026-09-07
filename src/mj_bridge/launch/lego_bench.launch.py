@@ -35,7 +35,9 @@ def launch_setup(context):
         .to_moveit_configs()
     )
     controllers = {
-        "moveit_controller_manager": "moveit_simple_controller_manager/MoveItSimpleControllerManager",
+        "moveit_controller_manager": (
+            "moveit_simple_controller_manager/MoveItSimpleControllerManager"
+        ),
         "moveit_simple_controller_manager": {
             "controller_names": ["mj_panda_arm_controller", "mj_panda_hand_controller"],
             "mj_panda_arm_controller": {
@@ -88,17 +90,28 @@ def launch_setup(context):
             "--frame-id", "world", "--child-frame-id", "realsense",
         ],
     )
+    placement_camera_tf = Node(
+        package="tf2_ros", executable="static_transform_publisher", output="screen",
+        arguments=[
+            "--x", "0.85", "--y", "0.35", "--z", "0.55",
+            "--qx", "0.63143547", "--qy", "0.63143547",
+            "--qz", "-0.31825972", "--qw", "-0.31825972",
+            "--frame-id", "world", "--child-frame-id", "placement_camera",
+        ],
+    )
     bridge = Node(
         package="mj_bridge", executable="mj_bridge", output="screen", additional_env=common_env,
     )
     rviz_config = os.path.join(
-        get_package_share_directory("moveit_resources_panda_moveit_config"), "launch", "moveit.rviz"
+        get_package_share_directory("moveit_resources_panda_moveit_config"),
+        "launch",
+        "moveit.rviz",
     )
     rviz = Node(
         package="rviz2", executable="rviz2", output="log", arguments=["-d", rviz_config],
         parameters=[moveit_config.to_dict()], condition=UnlessCondition(headless),
     )
-    nodes = [static_tf, camera_tf, rsp, move_group, bridge, rviz]
+    nodes = [static_tf, camera_tf, placement_camera_tf, rsp, move_group, bridge, rviz]
     if executor_mode == "oracle":
         executor_config = os.path.join(
             get_package_share_directory("lego_executor"), "config", "executor.yaml"
@@ -136,7 +149,10 @@ def launch_setup(context):
 def generate_launch_description():
     share = get_package_share_directory("mj_bridge")
     return LaunchDescription([
-        DeclareLaunchArgument("product", default_value=os.path.join(share, "examples", "traffic_light.yaml")),
+        DeclareLaunchArgument(
+            "product",
+            default_value=os.path.join(share, "examples", "traffic_light.yaml"),
+        ),
         DeclareLaunchArgument("seed", default_value="0"),
         DeclareLaunchArgument("output_dir", default_value="/tmp/lego_bench/latest"),
         DeclareLaunchArgument("headless", default_value="false"),

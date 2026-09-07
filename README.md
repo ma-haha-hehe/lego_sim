@@ -15,6 +15,7 @@ The benchmark takes a product description in YAML, creates the required loose pa
 - MoveIt 2 planning and trajectory execution
 - Ground-truth and RGB-D observation modes with an explicit no-oracle boundary
 - RGB, metric depth, camera calibration, and TF
+- Overhead source observation and oblique placement verification cameras
 - GroundingDINO, SAM, and FoundationPose visual reference pipeline
 - Explicit reset and result services for automated evaluation
 - Dependency-aware assembly planning with stable part IDs
@@ -67,6 +68,17 @@ To run the visual reference pipeline, see
 [Visual pick-and-place pipeline](docs/visual-pipeline.md). A CUDA-free geometry
 backend is included for simulator integration tests; production visual runs use
 GroundingDINO, SAM and FoundationPose.
+
+```bash
+./run_visual_pipeline.sh --headless
+```
+
+The visual launcher defaults to `--vision-backend auto`. It selects the
+FoundationPose pipeline only when its CUDA preflight passes, otherwise it
+reports the fallback and runs the CPU RGB-D geometry backend. Use
+`--vision-backend foundationpose` or `--vision-backend geometry` to make an
+experiment explicit. Oracle runs remain separate and never act as a hidden
+fallback for RGB-D evaluation.
 
 To start the environment without the reference executor:
 
@@ -133,7 +145,8 @@ with LegoBenchEnv(
 
 Actions are nine absolute actuator controls in the model's actuator order.
 Replace `neutral_action` with a controller or policy output. The environment
-uses raw contact physics and supports both oracle and RGB-D observations. See
+uses contact-verified grasp physics and supports both oracle and RGB-D
+observations. See
 [Direct Python API](docs/python-api.md) and the runnable
 [Python example](examples/lego_gym_env.py).
 
@@ -179,11 +192,14 @@ extension to the part registry and scene builder.
 | `/camera/camera_info` | Topic | Pinhole camera calibration |
 | `/lego_bench/vision_detections` | Topic | Visual pose estimates as JSON |
 | `/mj_bridge/capture_rgbd` | Service | Request one fresh RGB-D frame at a stationary pose |
+| `/mj_bridge/capture_placement_rgbd` | Service | Request an oblique RGB-D frame of a carried part |
+| `/lego_vision/detect` | Service | Estimate loose-part poses from the overhead view |
+| `/lego_vision/detect_placement` | Service | Estimate the carried-part pose before placement |
 | `/mj_bridge/benchmark_state` | Topic | Live score as JSON |
 | `/mj_bridge/reset` | Service | Restore the initial episode state |
 | `/mj_bridge/result` | Service | Score and export the current state |
 
-The full launch also provides MoveIt actions and services, including `/move_action`, `/execute_trajectory`, and `/plan_kinematic_path`. The camera frame is `realsense`; its static transform from `world` is published by the launch file.
+The full launch also provides MoveIt actions and services, including `/move_action`, `/execute_trajectory`, and `/plan_kinematic_path`. The camera frames are `realsense` and `placement_camera`; both static transforms from `world` are published by the launch file.
 
 An integration skeleton is available in [examples/external_executor.py](examples/external_executor.py).
 
@@ -237,12 +253,14 @@ and control experiments. `observation:=rgbd` publishes only RGB-D images and
 camera calibration; ground-truth poses and simulator segmentation are not
 published in this mode.
 
-`connection_mode:=physics` is the default and leaves grasping and engagement
-to MuJoCo contacts. In physics mode, grasp confirmation requires sustained
-contact with both fingertips, but no weld, pose correction, or target snap is
-created. Brick mass and principal inertia come from the public part registry;
-gravity, friction, contact compliance, and the Panda actuator dynamics remain
-active in both modes. Run the reference executor against raw contact physics
+`connection_mode:=physics` is the default. Grasp confirmation requires
+sustained contact with both fingertips. At release, a part inside the valid
+stud capture region retains its measured pose relative to the contacted
+support; this models the holding force of stud interference that the primitive
+collision geometry cannot resolve. The latch does not move the part to its
+YAML target or repair XY/yaw error. Brick mass and principal inertia come from
+the public part registry; gravity, friction, contact compliance, and the Panda
+actuator dynamics remain active. Run the reference executor with
 with:
 
 ```bash
@@ -250,8 +268,16 @@ with:
 ```
 
 The compound collision model includes an open underside so studs enter the
-brick cavity during placement. It approximates the external shell and fit, but
-is not a calibrated material model of stud-and-tube interference.
+brick cavity during placement. A 2-by-2 part receives a bounded 0.5 mm seating
+stroke after first support contact. A supported 4-by-2 beam receives 2 mm so
+both sides can engage; a base-layer beam uses the shorter stroke. It
+approximates the shell with a slightly enlarged collision opening in place of
+the moulded lead-in chamfer and a thin internal load surface at the nominal
+19.2 mm layer pitch. It is not a calibrated material model of stud-and-tube
+interference. Rubber fingertip pads use a high contact
+coefficient to resist in-hand slip; ABS-to-ABS and ABS-to-base contacts use a
+lower coefficient so the primitive stud geometry can self-centre during the
+seating stroke.
 `connection_mode:=snap` adds deterministic grasp attachment and target-aware
 stud alignment, which is useful when planner experiments must be isolated from
 contact-model variance.
@@ -310,6 +336,34 @@ src/lego_executor/            Reference planner adapter and MoveIt executor
 The repository check builds both ROS packages, runs the benchmark tests,
 validates and generates every example product, loads each generated MJCF model,
 compiles the policy examples, and runs the executor lint tests.
+
+Before a release or demonstration, run the full headless check:
+
+```bash
+./check_benchmark.sh --e2e
+```
+
+This runs six isolated ROS episodes using contact-verified grasp physics and
+pose-preserving stud engagement: oracle and RGB-D geometry runs for
+`single_block`, `traffic_light`, and `bridge`. The multi-part
+cases exercise dependency ordering, repeated perception, stacked placement,
+and a two-support bridge. The runner requires every part to complete the full
+state sequence and enforces final-pose, grasp-slip, collision, and stability
+limits. It also checks the run artifacts and visual debug outputs, assigns each
+episode a separate ROS domain, stops every launch automatically, and writes an
+`e2e_summary.json` report under `runs/e2e/<timestamp>/`.
+
+The release check applies the published benchmark limits of 6 mm XY, 4 mm Z,
+and 8 degrees yaw to both observation modes. Grasp translation and rotation are
+limited separately to 2 mm and 3 degrees, so a part cannot pass merely because
+it happens to settle near the target after slipping in the gripper.
+
+Run a smaller subset while developing:
+
+```bash
+python3 tests/run_e2e.py --product traffic_light --case geometry
+python3 tests/run_e2e.py --product bridge --case oracle
+```
 
 ## License and third-party material
 

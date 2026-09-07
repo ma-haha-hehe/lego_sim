@@ -35,9 +35,24 @@ class LegoVisionNode(Node):
         self.declare_parameter("detection_threshold", 0.20)
         self.declare_parameter("register_iterations", 5)
         self.declare_parameter("camera_position", [0.49, -0.15, 1.2])
+        self.declare_parameter("placement_camera_position", [0.85, 0.35, 0.55])
+        self.declare_parameter(
+            "placement_camera_rotation",
+            [
+                0.0, 0.5948430054, -0.8038418992,
+                1.0, 0.0, 0.0,
+                0.0, -0.8038418992, -0.5948430054,
+            ],
+        )
         self.declare_parameter("source_x", [0.30, 0.68])
         self.declare_parameter("source_y", [-0.42, 0.12])
         self.declare_parameter("source_z", [0.035, 0.075])
+        # Keep the service ROI broad enough for perspective-induced centroid
+        # shifts on tall stacks. The executor applies the tighter, task-aware
+        # 8 cm target gate before accepting a carried-part estimate.
+        self.declare_parameter("placement_x", [0.10, 0.65])
+        self.declare_parameter("placement_y", [0.10, 0.65])
+        self.declare_parameter("placement_z", [0.10, 0.40])
         self.declare_parameter("capture_timeout_s", 30.0)
         self.declare_parameter("debug_dir", "/tmp/lego_bench/vision")
 
@@ -54,9 +69,24 @@ class LegoVisionNode(Node):
         self.camera_position = np.asarray(
             self.get_parameter("camera_position").value, dtype=float
         )
+        self.placement_camera_position = np.asarray(
+            self.get_parameter("placement_camera_position").value, dtype=float
+        )
+        self.placement_camera_rotation = np.asarray(
+            self.get_parameter("placement_camera_rotation").value, dtype=float
+        ).reshape(3, 3)
         self.source_x = tuple(float(value) for value in self.get_parameter("source_x").value)
         self.source_y = tuple(float(value) for value in self.get_parameter("source_y").value)
         self.source_z = tuple(float(value) for value in self.get_parameter("source_z").value)
+        self.placement_x = tuple(
+            float(value) for value in self.get_parameter("placement_x").value
+        )
+        self.placement_y = tuple(
+            float(value) for value in self.get_parameter("placement_y").value
+        )
+        self.placement_z = tuple(
+            float(value) for value in self.get_parameter("placement_z").value
+        )
         self.capture_timeout_s = float(self.get_parameter("capture_timeout_s").value)
         self.debug_dir = Path(self.get_parameter("debug_dir").value)
         self.lock = threading.Lock()
@@ -88,12 +118,22 @@ class LegoVisionNode(Node):
         self.capture_client = self.create_client(
             Trigger, "/mj_bridge/capture_rgbd", callback_group=self.callback_group
         )
+        self.placement_capture_client = self.create_client(
+            Trigger,
+            "/mj_bridge/capture_placement_rgbd",
+            callback_group=self.callback_group,
+        )
         self.service = self.create_service(
             Trigger, "/lego_vision/detect", self.on_detect,
             callback_group=self.callback_group
         )
+        self.placement_service = self.create_service(
+            Trigger, "/lego_vision/detect_placement", self.on_detect_placement,
+            callback_group=self.callback_group
+        )
         self.get_logger().info(
-            f"Vision service ready: backend={self.backend.name}, camera=fixed overhead RGB-D"
+            f"Vision services ready: backend={self.backend.name}, "
+            "source=overhead RGB-D, placement=oblique RGB-D"
         )
 
     def on_rgb(self, message: Image):
@@ -141,6 +181,8 @@ class LegoVisionNode(Node):
         with self.lock:
             if any(value is None for value in (self.rgb, self.depth, self.intrinsics, self.goal)):
                 return None
+            if self.rgb_stamp_ns != self.depth_stamp_ns:
+                return None
             return (
                 self.rgb.copy(),
                 self.depth.copy(),
@@ -156,6 +198,16 @@ class LegoVisionNode(Node):
             if self.source_x[0] <= item.position[0] <= self.source_x[1]
             and self.source_y[0] <= item.position[1] <= self.source_y[1]
             and self.source_z[0] <= item.position[2] <= self.source_z[1]
+        ]
+
+    def placement_detections(self, detections: list[Detection]) -> list[Detection]:
+        """Keep elevated parts above the assembly area for visual servoing."""
+        return [
+            item
+            for item in detections
+            if self.placement_x[0] <= item.position[0] <= self.placement_x[1]
+            and self.placement_y[0] <= item.position[1] <= self.placement_y[1]
+            and self.placement_z[0] <= item.position[2] <= self.placement_z[1]
         ]
 
     def save_debug(self, rgb: np.ndarray, detections: list[Detection], stamp_ns: int) -> str:
@@ -191,14 +243,23 @@ class LegoVisionNode(Node):
         (self.debug_dir / "latest.json").write_text(text, encoding="utf-8")
 
     def on_detect(self, request, response):
+        return self.detect_region(request, response, "source")
+
+    def on_detect_placement(self, request, response):
+        return self.detect_region(request, response, "placement")
+
+    def detect_region(self, request, response, region: str):
         del request
         deadline = time.monotonic() + self.capture_timeout_s
         requested_stamp_ns = self.get_clock().now().nanoseconds
-        if not self.capture_client.wait_for_service(timeout_sec=2.0):
+        capture_client = (
+            self.capture_client if region == "source" else self.placement_capture_client
+        )
+        if not capture_client.wait_for_service(timeout_sec=2.0):
             response.success = False
             response.message = json.dumps({"error": "RGB-D capture service is unavailable"})
             return response
-        future = self.capture_client.call_async(Trigger.Request())
+        future = capture_client.call_async(Trigger.Request())
         while not future.done() and time.monotonic() < deadline:
             time.sleep(0.01)
         if not future.done() or not future.result().success:
@@ -224,10 +285,30 @@ class LegoVisionNode(Node):
         requested = goal.get("target_blocks", [])
         started = time.perf_counter()
         try:
-            detections = self.backend.infer(
-                rgb, depth, intrinsics, self.camera_position, requested
+            camera_position = (
+                self.camera_position
+                if region == "source"
+                else self.placement_camera_position
             )
-            detections = self.source_detections(detections)
+            camera_rotation = (
+                None if region == "source" else self.placement_camera_rotation
+            )
+            detections = self.backend.infer(
+                rgb, depth, intrinsics, camera_position, requested, camera_rotation
+            )
+            if region == "source":
+                detections = self.source_detections(detections)
+            else:
+                self.get_logger().debug(
+                    "Placement candidates before ROI: "
+                    + "; ".join(
+                        f"{item.color}/{item.part_type}="
+                        f"({item.position[0]:.4f},{item.position[1]:.4f},"
+                        f"{item.position[2]:.4f})"
+                        for item in detections
+                    )
+                )
+                detections = self.placement_detections(detections)
         except Exception as error:
             self.get_logger().error(f"Vision inference failed: {error}")
             response.success = False
@@ -241,7 +322,12 @@ class LegoVisionNode(Node):
             "episode_id": goal.get("episode_id"),
             "frame_stamp_ns": stamp_ns,
             "backend": self.backend.name,
-            "camera": "fixed_overhead_rgbd",
+            "camera": (
+                "fixed_overhead_rgbd"
+                if region == "source"
+                else "fixed_oblique_rgbd"
+            ),
+            "region": region,
             "elapsed_s": round(elapsed, 4),
             "debug_image": debug_image,
             "detections": [item.as_dict(index) for index, item in enumerate(detections)],
@@ -253,7 +339,7 @@ class LegoVisionNode(Node):
         response.success = bool(detections)
         response.message = message.data
         self.get_logger().info(
-            f"Perception completed in {elapsed:.3f}s: {len(detections)} source part(s), "
+            f"Perception completed in {elapsed:.3f}s: {len(detections)} {region} part(s), "
             f"backend={self.backend.name}"
         )
         return response

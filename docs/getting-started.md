@@ -63,7 +63,7 @@ Call `/mj_bridge/result` before shutting down if the final JSON artifacts are re
 
 ## Choosing an evaluation mode
 
-Use `oracle` to isolate planning and control performance. Use `rgbd` when the method should perform its own perception. Raw MuJoCo contact physics is the default; use `snap` only when repeatable assembly engagement is part of the experimental condition. Record these choices with every result.
+Use `oracle` to isolate planning and control performance. Use `rgbd` when the method should perform its own perception. The default `physics` mode requires a contact-verified grasp and preserves the measured release pose when the studs engage. Use `snap` only when deterministic target alignment is part of the experimental condition. Record these choices with every result.
 
 ## Direct Python policies
 

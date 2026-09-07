@@ -29,7 +29,7 @@ The product and seed determine the generated source poses. The episode manifest 
 
 ## Connection models
 
-The `physics` model leaves all grasps and assembly contacts to MuJoCo. The `snap` model adds deterministic gripper attachment after closing, then aligns a released part with its declared target and direct support layer inside a fixed capture region. The model is deliberately explicit because it is part of the experimental condition.
+The `physics` model requires sustained contact with both fingertips and keeps transport under MuJoCo dynamics. On release near a valid support, it preserves the measured relative pose with a stud-clutch constraint; this represents ABS interference without correcting a bad placement. The `snap` model additionally adds deterministic gripper attachment after closing, then aligns a released part with its declared target and direct support layer inside a fixed capture region. The model is deliberately explicit because it is part of the experimental condition.
 
 Table, plate, and part contacts use a two-timestep time constant with near-rigid
 impedance. A regression test applies a gradually increasing 10 N downward load

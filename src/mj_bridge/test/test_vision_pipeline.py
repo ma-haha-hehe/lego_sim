@@ -4,6 +4,7 @@ import pytest
 from mj_bridge.vision_pipeline import (
     FoundationPoseBackend,
     GeometryBackend,
+    _camera_point_to_world,
     foundationpose_preflight,
     make_backend,
 )
@@ -32,6 +33,45 @@ def test_geometry_backend_uses_rgb_and_metric_depth():
     assert detected.part_type == "brick_2x2"
     assert detected.color == "green"
     assert detected.position == pytest.approx([0.496875, -0.096875, 0.0905])
+
+
+def test_geometry_backend_separates_a_white_part_from_a_white_table():
+    rgb = np.full((120, 160, 3), 230, dtype=np.uint8)
+    depth = np.full((120, 160), 1.06, dtype=np.float32)
+    depth[45:75, 50:110] = 1.041
+    intrinsics = np.array(
+        [[160.0, 0.0, 80.0], [0.0, 160.0, 60.0], [0.0, 0.0, 1.0]],
+        dtype=float,
+    )
+
+    detections = GeometryBackend().infer(
+        rgb,
+        depth,
+        intrinsics,
+        np.array([0.5, -0.1, 1.1]),
+        [{"type": "brick_4x2", "color": "white"}],
+    )
+
+    assert len(detections) == 1
+    assert detections[0].part_type == "brick_4x2"
+    assert detections[0].color == "white"
+
+
+def test_oblique_camera_coordinates_are_transformed_to_world():
+    camera_position = np.array([0.85, 0.35, 0.55])
+    camera_rotation = np.array(
+        [
+            [0.0, 0.5948430054, -0.8038418992],
+            [1.0, 0.0, 0.0],
+            [0.0, -0.8038418992, -0.5948430054],
+        ]
+    )
+
+    world = _camera_point_to_world(
+        np.array([0.02, -0.03, 0.40]), camera_position, camera_rotation
+    )
+
+    assert world == pytest.approx(camera_position + camera_rotation @ [0.02, -0.03, 0.40])
 
 
 def test_foundationpose_backend_requires_an_external_install():

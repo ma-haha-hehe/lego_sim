@@ -13,7 +13,8 @@ creates a different experimental condition.
 4. Choose `physics` or `snap` and keep that choice fixed across methods.
 5. Use the same seed list for every method in a comparison.
 
-The `physics` condition measures the complete contact-rich task. The `snap`
+The `physics` condition measures the contact-rich task with physical grasping
+and a pose-preserving stud-clutch approximation. The `snap`
 condition removes much of the grasp and stud-engagement variance and is useful
 for isolating task planning or arm motion. Results from the two conditions must
 not be combined.

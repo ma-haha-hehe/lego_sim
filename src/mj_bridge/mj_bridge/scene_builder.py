@@ -84,10 +84,11 @@ DENSITY = 150
 
 
 # Sliding, torsional and rolling friction for the ABS-like part surfaces.
-# The values are paired with the rubber fingertip pads in panda.xml and keep a
-# physically grasped part from creeping during fast transfer motions.
-BRICK_FRICTION = "7.0 0.4 0.04"
-SUPPORT_FRICTION = "5.0 0.2 0.02"
+# Keep these below the rubber fingertip coefficients: the pads must hold a
+# carried part firmly, while stud-to-cavity contact still needs enough slip to
+# self-centre instead of hanging on the sharp edges of the primitive model.
+BRICK_FRICTION = "1.5 0.05 0.005"
+SUPPORT_FRICTION = "1.0 0.03 0.003"
 
 
 
@@ -312,11 +313,17 @@ def add_duplo_collision_geoms(body: ET.Element, brick_type: str) -> None:
     # roughly 4 mm to each layer.  Four perimeter walls and a top plate leave
     # the underside open, so studs can enter the cavity as they do on a real
     # brick.  The explicit inertial above owns the mass calculation.
-    wall_thickness = 0.0025
+    # The primitive shell has no moulded chamfer.  A 1 mm collision wall gives
+    # the stud pattern enough entry clearance to approximate that lead-in
+    # while preserving the measured outer dimensions used for grasp contact.
+    wall_thickness = 0.001
     top_thickness = 0.0025
 
-    def add_shell_box(size, pos):
-        geom = ET.SubElement(body, "geom", {"type": "box"})
+    def add_shell_box(size, pos, name=None):
+        attributes = {"type": "box"}
+        if name is not None:
+            attributes["name"] = name
+        geom = ET.SubElement(body, "geom", attributes)
         geom.set("size", " ".join(f"{value:.4f}" for value in size))
         geom.set("pos", " ".join(f"{value:.4f}" for value in pos))
         set_common_collision_params(geom)
@@ -342,6 +349,25 @@ def add_duplo_collision_geoms(body: ET.Element, brick_type: str) -> None:
          top_thickness / 2.0],
         [0.0, 0.0,
          COLLISION_Z_OFFSET + body_half[2] - top_thickness / 2.0],
+    )
+
+    # The visual mesh has an internal tube structure that carries vertical
+    # load once the studs are inserted.  The public collision approximation
+    # does not model those small curved surfaces, so add a thin internal stop
+    # at the nominal 19.2 mm layer pitch.  Its lower face meets the tops of
+    # the supporting studs at the YAML target height; the perimeter remains
+    # open and still controls lateral entry.
+    layer_pitch = 0.0192
+    support_plane_bottom = (
+        COLLISION_Z_OFFSET + body_half[2] + 2.0 * STUD_HALF_HEIGHT
+        - layer_pitch
+    )
+    support_plane_thickness = 0.001
+    add_shell_box(
+        [body_half[0] - wall_thickness, body_half[1] - wall_thickness,
+         support_plane_thickness / 2.0],
+        [0.0, 0.0, support_plane_bottom + support_plane_thickness / 2.0],
+        f"{body.get('name', 'brick')}_underside_clutch_stop",
     )
 
 

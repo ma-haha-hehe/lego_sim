@@ -181,6 +181,9 @@ GRIPPER_CLOSE_VALUE = 0.0
 
 
 GRIPPER_ACTION_EXTRA_SLEEP = 0.02
+PLACE_CONTACT_SEATING_DEPTH_M = 0.002
+PLACE_CONTACT_SEATING_DEPTH_2X2_M = 0.0005
+PLACE_CONTACT_SEATING_TIMEOUT_S = 0.5
 
 # ============================================================
 
@@ -338,6 +341,8 @@ class MuJoCoActionServer(Node):
         self.grasp_airborne_started = False
         self.grasp_airborne_finished = False
         self.grasp_airborne_since = None
+        self.place_contact_start_hand_z = None
+        self.place_contact_start_time = None
         self.grasp_translation_slip_by_body = {}
         self.grasp_rotation_slip_by_body = {}
 
@@ -395,6 +400,7 @@ class MuJoCoActionServer(Node):
         self.camera_request_lock = threading.Lock()
         self.camera_capture_requested = 0
         self.camera_capture_completed = 0
+        self.camera_capture_name = "realsense"
         if self.observation_mode == "rgbd":
             self.init_virtual_camera()
 
@@ -445,12 +451,24 @@ class MuJoCoActionServer(Node):
         self.capture_service = self.create_service(
             Trigger, "/mj_bridge/capture_rgbd", self.handle_capture_rgbd
         )
+        self.placement_capture_service = self.create_service(
+            Trigger,
+            "/mj_bridge/capture_placement_rgbd",
+            self.handle_capture_placement_rgbd,
+        )
         self._last_camera_publish = 0.0
         mode = "on demand" if self.camera_on_demand else "continuous"
         self.get_logger().info(f"RGB-D observation enabled on /camera/* ({mode})")
 
     def handle_capture_rgbd(self, request, response):
         """Queue one RGB-D frame without rendering in the ROS callback thread."""
+        return self.queue_rgbd_capture(request, response, "realsense")
+
+    def handle_capture_placement_rgbd(self, request, response):
+        """Queue one frame from the oblique placement camera."""
+        return self.queue_rgbd_capture(request, response, "placement_camera")
+
+    def queue_rgbd_capture(self, request, response, camera_name):
         del request
         if self.camera_renderer is None:
             response.success = False
@@ -459,6 +477,7 @@ class MuJoCoActionServer(Node):
         with self.camera_request_lock:
             self.camera_capture_requested += 1
             capture_id = self.camera_capture_requested
+            self.camera_capture_name = camera_name
         response.success = True
         response.message = f"RGB-D capture {capture_id} queued"
         return response
@@ -469,15 +488,16 @@ class MuJoCoActionServer(Node):
             if self.camera_capture_requested <= self.camera_capture_completed:
                 return None
             capture_id = self.camera_capture_requested
+            camera_name = self.camera_capture_name
         with self.mj_lock:
             if self.is_executing or self.gripper_moving:
                 return None
-        return capture_id
+        return capture_id, camera_name
 
-    def _image_message(self, array, encoding):
+    def _image_message(self, array, encoding, frame_id="realsense", stamp=None):
         msg = Image()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "realsense"
+        msg.header.stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
+        msg.header.frame_id = frame_id
         msg.height, msg.width = array.shape[:2]
         msg.encoding = encoding
         msg.is_bigendian = False
@@ -485,22 +505,31 @@ class MuJoCoActionServer(Node):
         msg.data = np.ascontiguousarray(array).tobytes()
         return msg
 
-    def publish_virtual_camera(self, capture_id=None):
+    def publish_virtual_camera(self, capture_id=None, camera_name="realsense"):
         if self.camera_renderer is None:
             return
         started = time.perf_counter()
         with self.mj_lock:
-            self.camera_renderer.update_scene(self.data, camera="realsense")
+            self.camera_renderer.update_scene(self.data, camera=camera_name)
             rgb = self.camera_renderer.render().copy()
             self.camera_renderer.enable_depth_rendering()
-            self.camera_renderer.update_scene(self.data, camera="realsense")
+            self.camera_renderer.update_scene(self.data, camera=camera_name)
             depth = self.camera_renderer.render().astype(np.float32).copy()
             self.camera_renderer.disable_depth_rendering()
-        self.rgb_pub.publish(self._image_message(rgb, "rgb8"))
-        self.depth_pub.publish(self._image_message(depth, "32FC1"))
+        # All members of one RGB-D capture must carry the same timestamp. If
+        # each message calls now() independently, a subscriber can pair the
+        # new colour image with depth from the previous capture during rapid
+        # visual-servo iterations.
+        capture_stamp = self.get_clock().now().to_msg()
+        self.rgb_pub.publish(
+            self._image_message(rgb, "rgb8", camera_name, capture_stamp)
+        )
+        self.depth_pub.publish(
+            self._image_message(depth, "32FC1", camera_name, capture_stamp)
+        )
         info = CameraInfo()
-        info.header.stamp = self.get_clock().now().to_msg()
-        info.header.frame_id = "realsense"
+        info.header.stamp = capture_stamp
+        info.header.frame_id = camera_name
         info.width, info.height = self.camera_width, self.camera_height
         fy = self.camera_height / (2.0 * math.tan(math.radians(self.camera_fovy) / 2.0))
         fx = fy
@@ -516,7 +545,7 @@ class MuJoCoActionServer(Node):
                     self.camera_capture_completed, capture_id
                 )
             self.get_logger().info(
-                f"Published requested RGB-D frame {capture_id} in "
+                f"Published requested {camera_name} RGB-D frame {capture_id} in "
                 f"{time.perf_counter() - started:.3f}s"
             )
 
@@ -554,6 +583,8 @@ class MuJoCoActionServer(Node):
         self.grasp_airborne_started = False
         self.grasp_airborne_finished = False
         self.grasp_airborne_since = None
+        self.place_contact_start_hand_z = None
+        self.place_contact_start_time = None
         self.grasp_translation_slip_by_body = {}
         self.grasp_rotation_slip_by_body = {}
         if self.episode_manifest:
@@ -1054,12 +1085,39 @@ class MuJoCoActionServer(Node):
             if not self.is_executing or self.trajectory is None:
                 return
 
-            # A carried part regaining non-gripper support means the vertical
-            # placement stroke has reached the product or base plate. Stop the
-            # servo at first physical contact instead of forcing the arm
-            # through the assembled geometry while it chases the nominal end
-            # point.
+            # Once support contact begins, continue through a short measured
+            # seating stroke so studs can enter the hollow underside. The arm
+            # then stops instead of chasing the full nominal endpoint through
+            # assembled geometry.
             if self.grasped_block is not None and self.grasp_airborne_finished:
+                grasp_center = grasp_center_world(self.model, self.data)
+                if grasp_center is None:
+                    return
+                hand_z = float(grasp_center[2])
+                target = self.manifest_target_for_body(self.grasped_block)
+                seating_depth = PLACE_CONTACT_SEATING_DEPTH_M
+                if target is not None:
+                    if (target.get("type") != "brick_4x2" or
+                            float(target["position"][2]) <=
+                            BRICK_ON_BASE_CENTER_Z + 0.005):
+                        seating_depth = PLACE_CONTACT_SEATING_DEPTH_2X2_M
+                if self.place_contact_start_hand_z is None:
+                    self.place_contact_start_hand_z = hand_z
+                    self.place_contact_start_time = float(self.data.time)
+                    self.get_logger().info(
+                        f"[PLACE_CONTACT_SEATING] {self.grasped_block}, "
+                        f"depth={seating_depth:.4f}m"
+                    )
+                    if seating_depth > 0.0:
+                        return
+                seated_depth = self.place_contact_start_hand_z - hand_z
+                seating_elapsed = (
+                    float(self.data.time) - self.place_contact_start_time
+                    if self.place_contact_start_time is not None else 0.0
+                )
+                if (seated_depth < seating_depth and
+                        seating_elapsed < PLACE_CONTACT_SEATING_TIMEOUT_S):
+                    return
                 for name in self.active_joint_names:
                     if name in self.joint_qpos_addr:
                         qadr = self.joint_qpos_addr[name]
@@ -1067,7 +1125,8 @@ class MuJoCoActionServer(Node):
                 self.is_executing = False
                 self.get_logger().info(
                     f"[PLACE_CONTACT_STOP] {self.grasped_block}, "
-                    "support_contact=true"
+                    f"support_contact=true, seated_depth={seated_depth:.4f}m, "
+                    f"elapsed={seating_elapsed:.3f}s"
                 )
                 return
 
@@ -1549,6 +1608,74 @@ class MuJoCoActionServer(Node):
             }
         )
 
+    def latch_released_block(self, body_name: str) -> bool:
+        """Hold a correctly seated part at its measured stud-relative pose.
+
+        The primitive collision model cannot reproduce ABS stud interference.
+        This latch is therefore created only during a commanded release near a
+        declared connection. It preserves the measured pose and never moves a
+        part onto its YAML target.
+        """
+        target = self.manifest_target_for_body(body_name)
+        body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, body_name
+        )
+        if target is None or body_id < 0:
+            return False
+
+        position = self.data.xpos[body_id].copy()
+        target_position = np.asarray(target["position"], dtype=float)
+        planar_error = float(np.linalg.norm(position[:2] - target_position[:2]))
+        vertical_error = abs(float(position[2] - target_position[2]))
+        symmetry_deg = 90.0 if target.get("type") == "brick_2x2" else 180.0
+        yaw_error = abs(math.degrees(
+            (yaw_from_quat_wxyz(self.data.xquat[body_id])
+             - float(target.get("yaw_rad", 0.0))
+             + math.radians(symmetry_deg) / 2.0)
+            % math.radians(symmetry_deg)
+            - math.radians(symmetry_deg) / 2.0
+        ))
+        if planar_error > 0.008 or vertical_error > 0.006 or yaw_error > 12.0:
+            self.get_logger().warning(
+                f"[STUD_CLUTCH_REJECTED] {body_name}, "
+                f"xy_error={planar_error:.4f}m, z_error={vertical_error:.4f}m, "
+                f"yaw_error={yaw_error:.2f}deg"
+            )
+            return False
+
+        if float(target["position"][2]) <= BRICK_ON_BASE_CENTER_Z + 0.005:
+            parent_name = ASSEMBLY_BASE_NAME
+        else:
+            candidates = []
+            for lower in self.episode_manifest["target_blocks"]:
+                lower_name = lower["body_name"]
+                if lower_name == body_name:
+                    continue
+                if float(lower["position"][2]) >= float(target["position"][2]):
+                    continue
+                if not any(weld["child"] == lower_name for weld in self.fake_welds):
+                    continue
+                if self.should_weld_bottom_to_top(body_name, lower_name):
+                    candidates.append((float(lower["position"][2]), lower_name))
+            if not candidates:
+                self.get_logger().warning(
+                    f"[STUD_CLUTCH_REJECTED] {body_name}, no engaged support"
+                )
+                return False
+            _, parent_name = max(candidates)
+
+        pair = tuple(sorted([parent_name, body_name]))
+        if pair in self.welded_pairs:
+            return True
+        self.create_fake_weld(parent_name, body_name)
+        self.welded_pairs.add(pair)
+        self.get_logger().info(
+            f"[STUD_CLUTCH_LATCH] parent={parent_name}, child={body_name}, "
+            f"xy_error={planar_error:.4f}m, z_error={vertical_error:.4f}m, "
+            f"yaw_error={yaw_error:.2f}deg, pose_preserved=true"
+        )
+        return True
+
     def settle_released_block(self, body_name: str) -> bool:
         """Transfer a released block from the hand to its intended support."""
         target = self.manifest_target_for_body(body_name)
@@ -1646,6 +1773,8 @@ class MuJoCoActionServer(Node):
                         ]
                         self.welded_pairs.discard(("hand", released))
                     self.grasped_block = None
+                    self.place_contact_start_hand_z = None
+                    self.place_contact_start_time = None
                     self.get_logger().info(
                         f"[GRASP_RELEASE] {released}, "
                         f"max_airborne_translation_slip="
@@ -1661,6 +1790,8 @@ class MuJoCoActionServer(Node):
                     self.grasp_reference_rotation = None
                     if self.connection_mode == "snap":
                         self.settle_released_block(released)
+                    elif self.connection_mode == "physics":
+                        self.latch_released_block(released)
                 return
             if self.grasped_block is not None:
                 self.update_grasp_slip_locked()
@@ -1741,6 +1872,8 @@ class MuJoCoActionServer(Node):
                 block_collision_center_world(self.data, body_id) - grasp_center
             ))
             self.grasped_block = body_name
+            self.place_contact_start_hand_z = None
+            self.place_contact_start_time = None
             block_rotation = self.data.xmat[body_id].reshape(3, 3)
             self.grasp_reference_offset = hand_rotation.T @ (
                 block_collision_center_world(self.data, body_id) - grasp_center
@@ -1872,7 +2005,8 @@ class MuJoCoActionServer(Node):
                 qadr = self.model.jnt_qposadr[child_jnt]
                 dofadr = self.model.jnt_dofadr[child_jnt]
 
-                if weld["parent"] == ASSEMBLY_BASE_NAME:
+                if (weld["parent"] == ASSEMBLY_BASE_NAME and
+                        "child_quat" in weld):
                     target_pos = np.array(
                         [
                             ASSEMBLY_BASE_CENTER_X + weld["rel_pos"][0],
@@ -1959,6 +2093,7 @@ def main():
 
                         if node.connection_mode == "snap":
                             node.auto_weld_touching_bricks()
+                        if node.connection_mode in {"physics", "snap"}:
                             node.maintain_fake_welds()
 
                     node.update_safety_metrics()
@@ -1969,9 +2104,10 @@ def main():
                     # pose. Other RGB-D clients retain the regular stream by
                     # leaving on-demand mode disabled.
                     if node.camera_renderer is not None:
-                        capture_id = node.pending_camera_capture()
-                        if capture_id is not None:
-                            node.publish_virtual_camera(capture_id)
+                        capture_request = node.pending_camera_capture()
+                        if capture_request is not None:
+                            capture_id, camera_name = capture_request
+                            node.publish_virtual_camera(capture_id, camera_name)
                             node._last_camera_publish = time.monotonic()
                         elif (not node.camera_on_demand and
                                 time.monotonic() - node._last_camera_publish >= 0.5):

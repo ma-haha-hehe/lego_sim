@@ -74,8 +74,14 @@ class Detection:
         }
 
 
-def _camera_point_to_world(point: np.ndarray, camera_position: np.ndarray) -> np.ndarray:
+def _camera_point_to_world(
+    point: np.ndarray,
+    camera_position: np.ndarray,
+    camera_rotation: np.ndarray | None = None,
+) -> np.ndarray:
     """Convert ROS optical coordinates for the downward fixed camera to world."""
+    if camera_rotation is not None:
+        return camera_position + camera_rotation @ point
     return np.array(
         [
             camera_position[0] + point[0],
@@ -168,6 +174,7 @@ class GeometryBackend:
         intrinsics: np.ndarray,
         camera_position: np.ndarray,
         requested_parts: Iterable[dict],
+        camera_rotation: np.ndarray | None = None,
     ) -> list[Detection]:
         requested = {
             (str(part.get("color", "unknown")), str(part.get("type", "brick_2x2")))
@@ -187,6 +194,11 @@ class GeometryBackend:
                     np.asarray(upper, dtype=np.uint8),
                 )
             color_mask[~np.isfinite(depth)] = 0
+            if camera_rotation is None:
+                # In the overhead view, depth separates a white part from the
+                # white tabletop even when their RGB masks are connected.
+                surface_z = camera_position[2] - depth
+                color_mask[surface_z < 0.052] = 0
             color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, kernel)
             contours, _ = cv2.findContours(
                 color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -197,7 +209,8 @@ class GeometryBackend:
                 mask = np.zeros(depth.shape, dtype=np.uint8)
                 cv2.drawContours(mask, [contour], -1, 1, thickness=-1)
                 part_type, ratio = _mask_type(mask > 0)
-                if requested and (color, part_type) not in requested:
+                if (requested and camera_rotation is None and
+                        (color, part_type) not in requested):
                     continue
                 points = _masked_points(mask > 0, depth, intrinsics)
                 if points.shape[0] < self.minimum_area_px:
@@ -205,8 +218,17 @@ class GeometryBackend:
                 # The visible depth is the upper surface.  Convert it to the
                 # body-centre convention expected by the executor.
                 camera_point = np.median(points, axis=0)
-                position = _camera_point_to_world(camera_point, camera_position)
+                position = _camera_point_to_world(
+                    camera_point, camera_position, camera_rotation
+                )
                 position[2] -= PART_HEIGHT_M[part_type] / 2.0
+                if camera_rotation is not None:
+                    world_points = (
+                        points @ camera_rotation.T + camera_position
+                    )
+                    lower = np.percentile(world_points[:, :2], 2.0, axis=0)
+                    upper = np.percentile(world_points[:, :2], 98.0, axis=0)
+                    position[:2] = (lower + upper) / 2.0
                 detections.append(
                     Detection(
                         part_type=part_type,
@@ -350,6 +372,7 @@ class FoundationPoseBackend:
         intrinsics: np.ndarray,
         camera_position: np.ndarray,
         requested_parts: Iterable[dict],
+        camera_rotation: np.ndarray | None = None,
     ) -> list[Detection]:
         from PIL import Image
 
@@ -395,9 +418,16 @@ class FoundationPoseBackend:
             if transform is None:
                 continue
             transform = np.asarray(transform, dtype=float)
-            world_position = _camera_point_to_world(transform[:3, 3], camera_position)
-            # R_world_camera for a fixed, downward ROS optical camera.
-            world_rotation = np.diag([1.0, -1.0, -1.0]) @ transform[:3, :3]
+            world_position = _camera_point_to_world(
+                transform[:3, 3], camera_position, camera_rotation
+            )
+            # Convert the estimated camera-frame orientation into world axes.
+            optical_to_world = (
+                np.diag([1.0, -1.0, -1.0])
+                if camera_rotation is None
+                else camera_rotation
+            )
+            world_rotation = optical_to_world @ transform[:3, :3]
             yaw = math.atan2(world_rotation[1, 0], world_rotation[0, 0])
             detections.append(
                 Detection(
@@ -473,6 +503,29 @@ def foundationpose_preflight(foundationpose_root: str, device: str = "cuda") -> 
     for package in ("transformers", "PIL", "trimesh", "cv2"):
         found = importlib.util.find_spec(package) is not None
         record(package, found, "installed" if found else "not installed")
+
+    foundationpose_imported = False
+    foundationpose_detail = "FoundationPose root is unavailable"
+    if root is not None and (root / "estimater.py").is_file():
+        inserted = str(root) not in sys.path
+        if inserted:
+            sys.path.insert(0, str(root))
+        try:
+            module = importlib.import_module("estimater")
+            required = ("FoundationPose", "ScorePredictor", "PoseRefinePredictor")
+            missing = [name for name in required if not hasattr(module, name)]
+            foundationpose_imported = not missing
+            foundationpose_detail = (
+                "estimater import succeeded"
+                if not missing
+                else "missing exports: " + ", ".join(missing)
+            )
+        except Exception as error:  # pragma: no cover - external CUDA installation
+            foundationpose_detail = f"estimater import failed: {error}"
+        finally:
+            if inserted:
+                sys.path.remove(str(root))
+    record("foundationpose_import", foundationpose_imported, foundationpose_detail)
 
     return {
         "ready": all(item["passed"] for item in checks),

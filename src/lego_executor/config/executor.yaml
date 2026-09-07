@@ -12,10 +12,15 @@ oracle_moveit_executor:
     place_descent_m: 0.155
     place_press_depth_m: 0.001
     cartesian_speed_scale: 0.30
+    place_speed_scale: 0.30
+    place_acceleration_scale: 0.20
     lift_speed_scale: 0.55
-    transport_rotation_speed_scale: 0.30
-    transport_velocity_scale: 0.65
-    transport_acceleration_scale: 0.15
+    # Wrist rotation is the highest torsional load on a held brick. Keep this
+    # stage conservative while allowing the translation stages to stay fast.
+    transport_rotation_speed_scale: 0.12
+    transport_velocity_scale: 0.50
+    transport_acceleration_scale: 0.08
+    large_part_motion_scale: 1.0
     gripper_open_m: 0.04
     gripper_closed_m: 0.012
     gripper_duration_s: 0.35
@@ -42,26 +47,45 @@ visual_moveit_executor:
     approach_height_m: 0.15
     gripper_offset_m: 0.1234
     grasp_descent_m: 0.170
-    # Match the grasp descent and add a small seating allowance.  This preserves
-    # the measured tool-to-part height without using simulator state.
-    place_descent_m: 0.1733
+    # Continue far enough to guarantee first support contact despite small
+    # visual and grasp-height errors. The bridge stops the stroke immediately
+    # when the held part touches the plate or an assembled part.
+    # The oblique camera corrects XY only. Its lightweight geometry backend
+    # estimates a visible surface rather than a reliable object-centre Z, so
+    # the calibrated vertical stroke remains independent of visual depth.
+    place_descent_m: 0.1773
     place_press_depth_m: 0.001
-    cartesian_speed_scale: 0.55
-    lift_speed_scale: 0.75
-    transport_rotation_speed_scale: 0.35
-    transport_velocity_scale: 0.70
-    transport_acceleration_scale: 0.15
+    cartesian_speed_scale: 0.45
+    # A lower acceleration on the final descent prevents the physically held
+    # part from twisting before it reaches the assembly surface.
+    place_speed_scale: 0.40
+    place_acceleration_scale: 0.20
+    lift_speed_scale: 0.65
+    transport_rotation_speed_scale: 0.12
+    transport_velocity_scale: 0.40
+    transport_acceleration_scale: 0.04
+    # The 4x2 beam has almost twice the mass and a longer moment arm.
+    large_part_motion_scale: 0.65
     gripper_open_m: 0.04
-    gripper_closed_m: 0.012
-    gripper_duration_s: 0.30
+    gripper_closed_m: 0.010
+    gripper_duration_s: 0.45
     motion_settle_s: 0.08
     release_settle_s: 0.15
     tool_yaw_offset_deg: 0.0
     perception_service: /lego_vision/detect
+    placement_perception_service: /lego_vision/detect_placement
+    visual_place_correction: true
+    visual_place_correction_iterations: 2
+    # White parts merge with the white Panda hand in the lightweight colour
+    # backend. FoundationPose users can clear this list after mask validation.
+    visual_place_correction_excluded_colors: [white]
     # Robot-side edge of the loose-part workspace at the hardware pipeline's
     # observation height. The offset leaves the overhead camera view clear.
     observe_pose_xyz: [0.45, -0.35, 0.50]
-    observe_yaw_deg: 45.0
+    # A fixed joint target keeps the elbow out of the overhead camera view.
+    # Re-solving the same Cartesian pose can otherwise select a different IK
+    # branch after each placement and occlude the remaining loose parts.
+    observe_joint_positions: [-2.435602, -0.169040, 1.699489, -1.853112, 0.175230, 1.871465, -1.571720]
     # Vision returns the part centre; do not bias the grasp toward an edge.
     grasp_offset_xy: [0.0, 0.0]
     place_offset_xy: [0.0, 0.0]

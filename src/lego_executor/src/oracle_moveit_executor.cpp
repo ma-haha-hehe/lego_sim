@@ -24,6 +24,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <future>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -115,10 +116,13 @@ public:
     declare_parameter("place_descent_m", 0.155);
     declare_parameter("place_press_depth_m", 0.001);
     declare_parameter("cartesian_speed_scale", 0.30);
+    declare_parameter("place_speed_scale", 0.30);
+    declare_parameter("place_acceleration_scale", 0.20);
     declare_parameter("lift_speed_scale", 0.55);
     declare_parameter("transport_rotation_speed_scale", 0.30);
     declare_parameter("transport_velocity_scale", 0.65);
     declare_parameter("transport_acceleration_scale", 0.30);
+    declare_parameter("large_part_motion_scale", 1.0);
     declare_parameter("gripper_open_m", 0.04);
     declare_parameter("gripper_closed_m", 0.014);
     declare_parameter("gripper_duration_s", 0.35);
@@ -129,8 +133,16 @@ public:
     declare_parameter("verify_lift_m", 0.025);
     declare_parameter("source_mode", "oracle");
     declare_parameter("perception_service", "/lego_vision/detect");
+    declare_parameter("placement_perception_service", "/lego_vision/detect_placement");
+    declare_parameter("visual_place_correction", true);
+    declare_parameter("visual_place_correction_iterations", 2);
+    declare_parameter(
+      "visual_place_correction_excluded_colors", std::vector<std::string>{"white"});
     declare_parameter("observe_pose_xyz", std::vector<double>{0.45, -0.35, 0.50});
-    declare_parameter("observe_yaw_deg", 45.0);
+    declare_parameter(
+      "observe_joint_positions",
+      std::vector<double>{-2.435602, -0.169040, 1.699489, -1.853112,
+        0.175230, 1.871465, -1.571720});
     declare_parameter("grasp_offset_xy", std::vector<double>{0.0, 0.0});
     declare_parameter("place_offset_xy", std::vector<double>{0.0, 0.0});
 
@@ -157,6 +169,8 @@ public:
     result_client_ = create_client<std_srvs::srv::Trigger>("/mj_bridge/result");
     perception_client_ = create_client<std_srvs::srv::Trigger>(
       get_parameter("perception_service").as_string());
+    placement_perception_client_ = create_client<std_srvs::srv::Trigger>(
+      get_parameter("placement_perception_service").as_string());
     gripper_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
       this, "/mj_panda_hand_controller/follow_joint_trajectory");
   }
@@ -327,6 +341,7 @@ public:
     const YAML::Node payload = YAML::Load(response->message);
     const YAML::Node detections = payload["detections"];
     YAML::Node selected;
+    bool found = false;
     double selected_score = -1.0;
     for (std::size_t index = 0; index < detections.size(); ++index) {
       const YAML::Node candidate = detections[index];
@@ -338,10 +353,11 @@ public:
       const double score = candidate["score"].as<double>(0.0);
       if (score > selected_score) {
         selected = candidate;
+        found = true;
         selected_score = score;
       }
     }
-    if (!selected) {
+    if (!found) {
       RCLCPP_ERROR(
         get_logger(), "Vision did not find a %s %s for task %s",
         task.color.c_str(), task.type.c_str(), task.id.c_str());
@@ -368,6 +384,74 @@ public:
       task.id.c_str(), payload["backend"].as<std::string>("unknown").c_str(),
       source.pose.position.x, source.pose.position.y, source.pose.position.z,
       yaw * 180.0 / M_PI, selected_score);
+    return true;
+  }
+
+  bool detect_carried(const Task & task, BlockState & carried)
+  {
+    if (!placement_perception_client_->wait_for_service(20s)) {
+      RCLCPP_ERROR(get_logger(), "Placement perception service is unavailable");
+      return false;
+    }
+    auto future = placement_perception_client_->async_send_request(
+      std::make_shared<std_srvs::srv::Trigger::Request>());
+    if (future.wait_for(180s) != std::future_status::ready) {
+      RCLCPP_ERROR(get_logger(), "Placement perception timed out");
+      return false;
+    }
+    const auto response = future.get();
+    if (!response->success) {
+      RCLCPP_ERROR(get_logger(), "Placement perception failed: %s", response->message.c_str());
+      return false;
+    }
+
+    const YAML::Node payload = YAML::Load(response->message);
+    const YAML::Node detections = payload["detections"];
+    YAML::Node selected;
+    bool found = false;
+    double selected_height = std::numeric_limits<double>::max();
+    for (std::size_t index = 0; index < detections.size(); ++index) {
+      const YAML::Node candidate = detections[index];
+      if (candidate["type"].as<std::string>("") != task.type ||
+        candidate["color"].as<std::string>("") != task.color)
+      {
+        continue;
+      }
+      const double x = candidate["position"][0].as<double>();
+      const double y = candidate["position"][1].as<double>();
+      const double z = candidate["position"][2].as<double>();
+      if (std::hypot(x - task.target.position.x, y - task.target.position.y) > 0.08) {
+        continue;
+      }
+      // The held part is the lowest matching coloured object in the elevated
+      // assembly ROI; the hand and wrist remain above it in the camera view.
+      if (z < selected_height) {
+        selected = candidate;
+        found = true;
+        selected_height = z;
+      }
+    }
+    if (!found) {
+      RCLCPP_ERROR(
+        get_logger(), "Vision did not find the carried %s %s for task %s",
+        task.color.c_str(), task.type.c_str(), task.id.c_str());
+      return false;
+    }
+
+    carried.id = task.id;
+    carried.type = task.type;
+    carried.color = task.color;
+    carried.pose.position.x = selected["position"][0].as<double>();
+    carried.pose.position.y = selected["position"][1].as<double>();
+    carried.pose.position.z = selected["position"][2].as<double>();
+    const double yaw = selected["yaw_rad"].as<double>(0.0);
+    carried.pose.orientation = down_orientation(yaw);
+    RCLCPP_INFO(
+      get_logger(),
+      "[%s] VISUAL_PLACE_SOURCE backend=%s position=(%.4f, %.4f, %.4f) yaw=%.1fdeg",
+      task.id.c_str(), payload["backend"].as<std::string>("unknown").c_str(),
+      carried.pose.position.x, carried.pose.position.y, carried.pose.position.z,
+      yaw * 180.0 / M_PI);
     return true;
   }
 
@@ -421,6 +505,7 @@ private:
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr reset_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr result_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr perception_client_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr placement_perception_client_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr gripper_client_;
 };
 
@@ -428,7 +513,8 @@ bool move_linear_to_pose(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
   const geometry_msgs::msg::Pose & target,
-  double speed_scale);
+  double speed_scale,
+  double acceleration_scale = -1.0);
 
 bool move_to_pose(
   ExecutorNode & node,
@@ -480,7 +566,8 @@ bool move_linear_to_pose(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
   const geometry_msgs::msg::Pose & target,
-  double speed_scale)
+  double speed_scale,
+  double acceleration_scale)
 {
   arm.setStartStateToCurrentState();
   moveit_msgs::msg::RobotTrajectory trajectory_message;
@@ -492,7 +579,8 @@ bool move_linear_to_pose(
   robot_trajectory::RobotTrajectory trajectory(arm.getRobotModel(), arm.getName());
   trajectory.setRobotTrajectoryMsg(*arm.getCurrentState(), trajectory_message);
   trajectory_processing::TimeOptimalTrajectoryGeneration timing;
-  if (!timing.computeTimeStamps(trajectory, speed_scale, speed_scale)) {
+  const double acceleration = acceleration_scale > 0.0 ? acceleration_scale : speed_scale;
+  if (!timing.computeTimeStamps(trajectory, speed_scale, acceleration)) {
     RCLCPP_ERROR(node.get_logger(), "Cartesian trajectory timing failed");
     return false;
   }
@@ -504,11 +592,12 @@ bool move_linear(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
   double z_delta,
-  double speed_scale)
+  double speed_scale,
+  double acceleration_scale = -1.0)
 {
   geometry_msgs::msg::Pose target = arm.getCurrentPose().pose;
   target.position.z += z_delta;
-  return move_linear_to_pose(node, arm, target, speed_scale);
+  return move_linear_to_pose(node, arm, target, speed_scale, acceleration_scale);
 }
 
 bool move_to_observe(
@@ -516,19 +605,35 @@ bool move_to_observe(
   moveit::planning_interface::MoveGroupInterface & arm)
 {
   const auto xyz = node.get_parameter("observe_pose_xyz").as_double_array();
-  if (xyz.size() != 3) {
-    RCLCPP_ERROR(node.get_logger(), "observe_pose_xyz must contain three values");
+  const auto joints = node.get_parameter("observe_joint_positions").as_double_array();
+  if (xyz.size() != 3 || joints.size() != 7) {
+    RCLCPP_ERROR(
+      node.get_logger(),
+      "observe_pose_xyz and observe_joint_positions must contain 3 and 7 values");
     return false;
   }
-  geometry_msgs::msg::Pose pose;
-  pose.position.x = xyz[0];
-  pose.position.y = xyz[1];
-  pose.position.z = xyz[2];
-  pose.orientation = down_orientation(
-    node.get_parameter("observe_yaw_deg").as_double() * M_PI / 180.0);
   RCLCPP_INFO(
-    node.get_logger(), "MOVE_TO_OBSERVE park=(%.3f, %.3f, %.3f)", xyz[0], xyz[1], xyz[2]);
-  return move_to_pose(node, arm, pose, "observe", true);
+    node.get_logger(),
+    "MOVE_TO_OBSERVE fixed view above source=(%.3f, %.3f, %.3f)",
+    xyz[0], xyz[1], xyz[2]);
+  arm.clearPoseTargets();
+  arm.clearPathConstraints();
+  const int attempts = node.get_parameter("planning_attempts").as_int();
+  for (int attempt = 1; attempt <= attempts; ++attempt) {
+    arm.setStartStateToCurrentState();
+    if (!arm.setJointValueTarget(joints)) {
+      RCLCPP_ERROR(node.get_logger(), "Fixed observation joint target is invalid");
+      return false;
+    }
+    if (arm.move() == moveit::core::MoveItErrorCode::SUCCESS) {
+      std::this_thread::sleep_for(
+        std::chrono::duration<double>(node.get_parameter("motion_settle_s").as_double()));
+      return true;
+    }
+    RCLCPP_WARN(
+      node.get_logger(), "observe planning attempt %d/%d failed", attempt, attempts);
+  }
+  return false;
 }
 
 void add_table(
@@ -584,6 +689,9 @@ bool execute_task(
   const double place_descent = node.get_parameter("place_descent_m").as_double();
   const double place_press_depth = node.get_parameter("place_press_depth_m").as_double();
   const double cartesian_speed = node.get_parameter("cartesian_speed_scale").as_double();
+  const double place_speed = node.get_parameter("place_speed_scale").as_double();
+  const double place_acceleration =
+    node.get_parameter("place_acceleration_scale").as_double();
   const double lift_speed = node.get_parameter("lift_speed_scale").as_double();
   const double rotation_speed =
     node.get_parameter("transport_rotation_speed_scale").as_double();
@@ -591,6 +699,8 @@ bool execute_task(
     node.get_parameter("transport_velocity_scale").as_double();
   const double transport_acceleration =
     node.get_parameter("transport_acceleration_scale").as_double();
+  const double large_part_scale = task.type == "brick_4x2" ?
+    node.get_parameter("large_part_motion_scale").as_double() : 1.0;
 
   const auto grasp_offset = node.get_parameter("grasp_offset_xy").as_double_array();
   if (grasp_offset.size() != 2) {
@@ -631,7 +741,7 @@ bool execute_task(
   arm.attachObject(
     task.id, "panda_hand", {"panda_hand", "panda_leftfinger", "panda_rightfinger", "panda_link8"});
   RCLCPP_INFO(node.get_logger(), "[%s] LIFT", task.id.c_str());
-  if (!move_linear(node, arm, grasp_descent, lift_speed)) {
+  if (!move_linear(node, arm, grasp_descent, lift_speed * large_part_scale)) {
     return false;
   }
   std::this_thread::sleep_for(
@@ -649,7 +759,9 @@ bool execute_task(
   geometry_msgs::msg::Pose aligned_for_transport = arm.getCurrentPose().pose;
   aligned_for_transport.orientation = task.target.orientation;
   RCLCPP_INFO(node.get_logger(), "[%s] ALIGN_TOOL_FOR_PLACE", task.id.c_str());
-  if (!move_linear_to_pose(node, arm, aligned_for_transport, rotation_speed)) {
+  if (!move_linear_to_pose(
+      node, arm, aligned_for_transport, rotation_speed * large_part_scale))
+  {
     return false;
   }
 
@@ -663,8 +775,8 @@ bool execute_task(
   preplace.position.y += place_offset[1];
   preplace.position.z += gripper_offset + approach;
   RCLCPP_INFO(node.get_logger(), "[%s] MOVE_TO_PREPLACE", task.id.c_str());
-  arm.setMaxVelocityScalingFactor(transport_velocity);
-  arm.setMaxAccelerationScalingFactor(transport_acceleration);
+  arm.setMaxVelocityScalingFactor(transport_velocity * large_part_scale);
+  arm.setMaxAccelerationScalingFactor(transport_acceleration * large_part_scale);
   const bool reached_preplace = move_to_pose(node, arm, preplace, "preplace", true);
   arm.setMaxVelocityScalingFactor(node.get_parameter("velocity_scale").as_double());
   arm.setMaxAccelerationScalingFactor(node.get_parameter("acceleration_scale").as_double());
@@ -687,9 +799,51 @@ bool execute_task(
     if (!move_linear_to_pose(node, arm, corrected, cartesian_speed)) {
       return false;
     }
+  } else if (node.get_parameter("visual_place_correction").as_bool()) {
+    const auto excluded_colors =
+      node.get_parameter("visual_place_correction_excluded_colors").as_string_array();
+    if (std::find(excluded_colors.begin(), excluded_colors.end(), task.color) !=
+      excluded_colors.end())
+    {
+      RCLCPP_WARN(
+        node.get_logger(),
+        "[%s] VISUAL_PLACE_CORRECTION_SKIPPED color=%s is excluded",
+        task.id.c_str(), task.color.c_str());
+    } else {
+      const int iterations = std::max(
+        1, static_cast<int>(node.get_parameter("visual_place_correction_iterations").as_int()));
+      for (int iteration = 0; iteration < iterations; ++iteration) {
+        BlockState carried;
+        if (!node.detect_carried(task, carried)) {
+          RCLCPP_WARN(
+            node.get_logger(),
+            "[%s] VISUAL_PLACE_CORRECTION_SKIPPED iteration=%d/%d; "
+            "continuing from the last observable pose",
+            task.id.c_str(), iteration + 1, iterations);
+          break;
+        }
+        geometry_msgs::msg::Pose corrected = arm.getCurrentPose().pose;
+        const double correction_x = task.target.position.x - carried.pose.position.x;
+        const double correction_y = task.target.position.y - carried.pose.position.y;
+        corrected.position.x += correction_x;
+        corrected.position.y += correction_y;
+        RCLCPP_INFO(
+          node.get_logger(),
+          "[%s] VISUAL_ALIGN_CARRIED_BLOCK iteration=%d/%d delta=(%.4f, %.4f, 0.0000)m",
+          task.id.c_str(), iteration + 1, iterations, correction_x, correction_y);
+        if (!move_linear_to_pose(node, arm, corrected, cartesian_speed)) {
+          return false;
+        }
+      }
+    }
   }
-  RCLCPP_INFO(node.get_logger(), "[%s] DESCEND_TO_TARGET", task.id.c_str());
-  if (!move_linear(node, arm, -place_descent, cartesian_speed)) {
+  RCLCPP_INFO(
+    node.get_logger(), "[%s] DESCEND_TO_TARGET distance=%.4fm",
+    task.id.c_str(), place_descent);
+  if (!move_linear(
+      node, arm, -place_descent, place_speed * large_part_scale,
+      place_acceleration * large_part_scale))
+  {
     return false;
   }
   arm.detachObject(task.id);
@@ -702,7 +856,7 @@ bool execute_task(
     std::chrono::duration<double>(node.get_parameter("release_settle_s").as_double()));
   add_block(scene, arm.getPlanningFrame(), task.id, task.type, task.target);
   RCLCPP_INFO(node.get_logger(), "[%s] RETREAT", task.id.c_str());
-  return move_linear(node, arm, approach, lift_speed);
+  return move_linear(node, arm, approach, lift_speed * large_part_scale);
 }
 
 }  // namespace
