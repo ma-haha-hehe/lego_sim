@@ -83,6 +83,9 @@ visual_moveit_executor:
     placement_perception_service: /lego_vision/detect_placement
     visual_place_correction: true
     visual_place_correction_iterations: 2
+    # The lightweight geometry backend sees only the unoccluded part surface,
+    # so its oblique-view centroid is suitable for verification but not servoing.
+    visual_place_correction_backends: [groundingdino_sam_foundationpose]
     # White parts merge with the white Panda hand in the lightweight colour
     # backend. FoundationPose users can clear this list after mask validation.
     visual_place_correction_excluded_colors: [white]

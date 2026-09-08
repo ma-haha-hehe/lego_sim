@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import signal
@@ -114,7 +115,8 @@ def execution_order(run_dir: Path) -> list[str]:
     return block_ids
 
 
-def assert_state_order(log_text: str, block_ids: list[str], visual: bool) -> None:
+def assert_state_order(log_text: str, block_ids: list[str], visual: bool,
+                       planned_spins: dict[str, int]) -> None:
     """Verify every block follows the complete assembly state machine in plan order."""
     cursor = -1
     for block_id in block_ids:
@@ -148,6 +150,11 @@ def assert_state_order(log_text: str, block_ids: list[str], visual: bool) -> Non
         if face_spin not in (0, 90):
             raise EndToEndFailure(
                 f"grasp for {block_id} is not aligned with a part face: {face_spin} deg"
+            )
+        if face_spin != planned_spins[block_id] % 180:
+            raise EndToEndFailure(
+                f"executor changed {block_id} grasp spin from "
+                f"{planned_spins[block_id]} to {face_spin} degrees"
             )
         cursor = alignment.start()
         for state in TASK_STATES:
@@ -280,6 +287,17 @@ def validate_result(label: str, case: dict, result: dict, run_dir: Path,
     if missing:
         raise EndToEndFailure(f"{label}: missing run artifacts: {', '.join(missing)}")
 
+    manifest = yaml.safe_load(
+        (run_dir / "episode_manifest.yaml").read_text(encoding="utf-8")
+    )
+    allowed_yaws = (0.0, math.pi / 2.0)
+    for block in manifest["spawned_blocks"]:
+        yaw = float(block["yaw_rad"])
+        if not any(math.isclose(yaw, allowed, abs_tol=1e-9) for allowed in allowed_yaws):
+            raise EndToEndFailure(
+                f"{label}: {block['id']} source yaw is not 0 or 90 degrees"
+            )
+
     if case["observation_mode"] == "rgbd":
         vision_json = run_dir / "vision" / "latest.json"
         vision_image = run_dir / "vision" / "latest.png"
@@ -305,7 +323,7 @@ def validate_result(label: str, case: dict, result: dict, run_dir: Path,
 
 
 def run_case(repo: Path, session_dir: Path, case_name: str, product_name: str,
-             motion_mode: str, timeout_s: float, domain_id: int) -> dict:
+             motion_mode: str, timeout_s: float, domain_id: int, seed: int) -> dict:
     case = CASES[case_name]
     label = f"{product_name}-{case_name}"
     run_dir = session_dir / label
@@ -314,7 +332,7 @@ def run_case(repo: Path, session_dir: Path, case_name: str, product_name: str,
     command = [
         str(repo / case["script"]),
         "--product", str(repo / PRODUCTS[product_name]),
-        "--seed", "42",
+        "--seed", str(seed),
         "--output-dir", str(run_dir),
         "--connection-mode", "physics",
         "--motion-mode", motion_mode,
@@ -364,12 +382,22 @@ def run_case(repo: Path, session_dir: Path, case_name: str, product_name: str,
         elif planning_marker not in log_text:
             raise EndToEndFailure(f"{label}: MoveIt planning was not exercised")
         block_ids = execution_order(run_dir)
-        assert_state_order(log_text, block_ids, case_name == "geometry")
+        plan = yaml.safe_load(
+            (run_dir / "execution_plan.yaml").read_text(encoding="utf-8")
+        )
+        planned_spins = {
+            str(step["id"]): int(round(float(step["grasp_spin_deg"])))
+            for step in plan["steps"]
+        }
+        assert_state_order(
+            log_text, block_ids, case_name == "geometry", planned_spins
+        )
         validate_result(label, case, result, run_dir, block_ids)
         return {
             "case": case_name,
             "product": product_name,
             "motion_mode": motion_mode,
+            "seed": seed,
             "label": label,
             "passed": True,
             "wall_time_s": round(time.monotonic() - started, 3),
@@ -408,6 +436,7 @@ def parse_arguments(argv=None):
         help="executor motion mode (default: cartesian)",
     )
     parser.add_argument("--domain-id", type=int)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-root", default="runs/e2e")
     return parser.parse_args(argv)
 
@@ -447,6 +476,7 @@ def main(argv=None) -> int:
             ["git", "rev-parse", "HEAD"], cwd=repo, text=True
         ).strip(),
         "ros_domain_id": domain_id,
+        "seed": arguments.seed,
         "motion_mode": arguments.motion_mode,
         "cases": [],
     }
@@ -460,7 +490,8 @@ def main(argv=None) -> int:
         try:
             case_report = run_case(
                 repo, session_dir, case_name, product_name,
-                arguments.motion_mode, arguments.timeout_s, case_domain_id
+                arguments.motion_mode, arguments.timeout_s, case_domain_id,
+                arguments.seed
             )
         except EndToEndFailure as error:
             report["failure"] = {"case": label, "message": str(error)}

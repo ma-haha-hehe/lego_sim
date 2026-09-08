@@ -26,6 +26,14 @@ manifest. The supplied plan contains ordered `steps`, each with `id`, `type`,
 file, modify it, or replace the planner while retaining block IDs from the
 product YAML.
 
+The reference planner builds a reverse-disassembly sequence and reverses it for
+assembly. `grasp_spin_deg` is restricted to `0` or `90` and is measured in the
+part's local frame, not the world frame. The commanded world orientation is the
+observed part yaw plus that spin. Clear parts prefer 90 degrees; if that finger
+corridor is occupied, the planner tries 0 degrees. The top-level
+`grasp_angle_frame: part_local` field makes this convention explicit for custom
+executors.
+
 Run the reference executor against an already running episode with:
 
 ```bash

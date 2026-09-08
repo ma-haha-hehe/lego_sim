@@ -31,6 +31,16 @@ def test_seed_is_reproducible():
     assert a["spawned_blocks"] == b["spawned_blocks"]
 
 
+def test_spawned_parts_use_orthogonal_yaw_only():
+    observed = set()
+    for seed in range(12):
+        episode = generate_episode(sample_product(), seed=seed)
+        assert episode["spawn_yaw_choices_deg"] == [0.0, 90.0]
+        for block in episode["spawned_blocks"]:
+            observed.add(round(float(block["yaw_rad"]), 8))
+    assert observed == {0.0, round(math.pi / 2.0, 8)}
+
+
 def test_spawned_parts_do_not_overlap_conservative_aabbs():
     episode = generate_episode(sample_product(), seed=9)
     a, b = episode["spawned_blocks"]
@@ -114,6 +124,40 @@ def test_planner_records_multiple_direct_supports():
     plan = plan_assembly(product)
     assert plan["steps"][2]["id"] == "beam"
     assert plan["steps"][2]["depends_on"] == ["left", "right"]
+
+
+def test_planner_prefers_90_degree_grasp_for_clear_2x4():
+    product = normalize_product({"blocks": [
+        {"name": "beam", "type": "brick_4x2", "pos": [0, 0, 0]},
+    ]})
+    plan = plan_assembly(product)
+    assert plan["planning_strategy"] == "reverse_disassembly_90_first"
+    assert plan["grasp_angle_frame"] == "part_local"
+    assert plan["steps"][0]["grasp_spin_deg"] == 90.0
+
+
+def test_planner_grasp_angle_is_relative_to_rotated_2x4():
+    product = normalize_product({"blocks": [
+        {
+            "name": "beam",
+            "type": "brick_4x2",
+            "pos": [0, 0, 0],
+            "rotation": [0, 0, 90],
+        },
+        {"name": "local_x_obstacle", "type": "brick_2x2", "pos": [0, 0.032, 0]},
+    ]})
+    plan = plan_assembly(product)
+    beam_step = next(step for step in plan["steps"] if step["id"] == "beam")
+    assert beam_step["grasp_spin_deg"] == 0.0
+
+
+def test_planner_reverses_same_level_disassembly_order():
+    product = normalize_product({"blocks": [
+        {"name": "first", "type": "brick_2x2", "pos": [-0.08, 0, 0]},
+        {"name": "second", "type": "brick_2x2", "pos": [0.08, 0, 0]},
+    ]})
+    plan = plan_assembly(product)
+    assert [step["id"] for step in plan["steps"]] == ["second", "first"]
 
 
 def test_table_contact_resists_robot_scale_downward_force():

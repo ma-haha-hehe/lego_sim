@@ -26,7 +26,7 @@ jobs:
             python3 -c "import mujoco; mujoco.MjModel.from_xml_path('${output}/scene.xml')"
           done
       - run: python3 -c "import yaml; p=yaml.safe_load(open('/tmp/traffic_light/execution_plan.yaml')); assert [s['id'] for s in p['steps']] == ['green_base', 'yellow_middle', 'red_top']"
-      - run: python3 -c "import yaml; p=yaml.safe_load(open('/tmp/bridge/execution_plan.yaml')); assert [s['id'] for s in p['steps']] == ['left_support', 'right_support', 'top_beam']"
+      - run: python3 -c "import yaml; p=yaml.safe_load(open('/tmp/bridge/execution_plan.yaml')); assert [s['id'] for s in p['steps']] == ['right_support', 'left_support', 'top_beam']; assert p['grasp_angle_frame'] == 'part_local'; assert all(s['grasp_spin_deg'] in (0.0, 90.0) for s in p['steps'])"
       - run: . /opt/ros/humble/setup.sh && colcon build --packages-select mj_bridge lego_executor --symlink-install
       - run: . /opt/ros/humble/setup.sh && colcon test --packages-select lego_executor
       - run: colcon test-result --test-result-base build/lego_executor --verbose

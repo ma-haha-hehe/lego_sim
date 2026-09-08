@@ -1,9 +1,10 @@
 # Visual pick-and-place pipeline
 
 The visual reference pipeline estimates every source pose from a fixed overhead
-RGB-D camera. A second, oblique camera observes the carried part above the
-assembly plate and closes small XY errors before the final vertical descent. It
-follows the perception sequence used by the hardware workspace:
+RGB-D camera. A second, oblique camera can observe the carried part above the
+assembly plate and close small XY errors before the final vertical descent when
+the selected backend provides full-pose registration. It follows the perception
+sequence used by the hardware workspace:
 
 ```text
 RGB image -> GroundingDINO -> SAM -> FoundationPose -> world pose
@@ -16,9 +17,10 @@ workspace, shifted slightly toward the assembly plate, at approximately
 processes the newest RGB-D frame, returns the matching source-part pose, and the
 executor runs the normal pick-and-place state machine. Gripper yaw is aligned
 with a detected part face: square bricks may use either orthogonal face pair,
-while rectangular bricks are clamped across their shorter width. Transfers use
-the nearest yaw that is equivalent under the part's 90- or 180-degree symmetry,
-which avoids unnecessary wrist rotation while preserving the YAML target.
+while rectangular bricks use the planner's selected 0- or 90-degree local
+grasp. Transfers use the nearest yaw that is equivalent under the part's 90- or
+180-degree symmetry, which avoids unnecessary wrist rotation while preserving
+the YAML target.
 The default motion mode uses axis-aligned Cartesian segments through a clear X
 corridor for observation and overhead transfer. Grasp approach, lift,
 placement, and retreat are Cartesian as well, so no OMPL route is generated.
@@ -31,12 +33,12 @@ observation and overhead transfer; the direct route remains its fallback.
 
 Camera rendering is on demand when the supplied visual executor is active. The
 source service requests an overhead frame after the arm stops at the observation
-pose. During placement, the executor requests an oblique frame while holding the
-part above its target and applies up to two Cartesian XY corrections. Every
-request rejects frames older than the request itself. MuJoCo does not render
-camera images during a trajectory, which keeps image generation from stalling
-the physics and controller loop. With `executor:=none`, RGB-D remains a regular
-stream for external policies.
+pose. During placement, an enabled full-pose backend can request an oblique frame
+while the part is held above its target and apply up to two Cartesian XY
+corrections. Every request rejects frames older than the request itself. MuJoCo
+does not render camera images during a trajectory, which keeps image generation
+from stalling the physics and controller loop. With `executor:=none`, RGB-D
+remains a regular stream for external policies.
 
 RGB, metric depth and camera calibration from one capture share one timestamp.
 The vision service refuses to infer until the RGB and depth timestamps match,
@@ -102,6 +104,14 @@ Run a complete visual episode with:
 Add `--motion-mode moveit` to run the same visual state machine with the
 collision-aware planner. Omitting the option keeps the direct Cartesian mode.
 
+The CPU geometry backend drives source picking but treats the oblique placement
+view as verification-only. A partly hidden carried brick produces a biased
+colour-mask centroid, so using it for closed-loop correction can make a nominal
+placement worse. The FoundationPose backend remains enabled for placement
+correction because it estimates the complete object pose from the RGB-D mask
+and part mesh. This is controlled by
+`visual_place_correction_backends` in `executor.yaml`.
+
 FoundationPose registration uses five refinement iterations by default to keep
 the perception pause short. Change the `register_iterations` ROS parameter if a
 camera or object model needs a longer refinement pass.
@@ -123,11 +133,11 @@ executor and contact physics with the geometry backend:
 This backend segments the rendered RGB image by colour and derives position and
 yaw from metric depth and image geometry. It is an integration test, not a
 replacement for GroundingDINO, SAM or FoundationPose, and its results must be
-reported as `rgbd_geometry`. The lightweight colour backend skips placement
-correction for white parts because the white Panda hand can merge with the
-part mask in the oblique view. Source detection and physical placement still
-run normally. FoundationPose users may clear
-`visual_place_correction_excluded_colors` after validating their masks.
+reported as `rgbd_geometry`. Its oblique placement view is verification-only
+because the hand can hide part of a carried brick and bias the visible-mask
+centroid. Source detection and physical placement still run normally.
+FoundationPose users may clear `visual_place_correction_excluded_colors` after
+validating their masks.
 
 ## Outputs
 

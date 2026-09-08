@@ -21,8 +21,9 @@ observation, info = env.reset()
 ```
 
 Any schema-v1 product YAML accepted by `lego-bench validate` can be used. The
-seed controls randomized, non-overlapping source poses. Changing the reset seed
-regenerates the episode:
+seed controls randomized, non-overlapping source positions and chooses a 0- or
+90-degree initial yaw for every part. Changing the reset seed regenerates the
+episode:
 
 ```python
 observation, info = env.reset(seed=43)

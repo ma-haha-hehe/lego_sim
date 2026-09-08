@@ -93,15 +93,14 @@ double yaw_from_wxyz(const YAML::Node & value)
 
 double face_aligned_spin_rad(const std::string & type, double requested_spin_deg)
 {
-  // Clamp rectangular bricks across their 32 mm width.  A square brick may
-  // use either pair of faces according to the assembly accessibility plan.
-  if (type == "brick_4x2") {
-    return 0.0;
-  }
+  (void)type;
+  // The planner angle is relative to the detected part frame.  Restrict it to
+  // the two face-aligned strategies used by the hardware pipeline.
   constexpr double right_angle_deg = 90.0;
   const double snapped_deg =
     std::round(requested_spin_deg / right_angle_deg) * right_angle_deg;
-  return snapped_deg * M_PI / 180.0;
+  const double normalized_deg = std::fmod(std::abs(snapped_deg), 180.0);
+  return normalized_deg < 45.0 ? 0.0 : M_PI / 2.0;
 }
 
 double nearest_symmetric_yaw(
@@ -162,6 +161,9 @@ public:
     declare_parameter("visual_place_correction", true);
     declare_parameter("visual_place_correction_iterations", 2);
     declare_parameter(
+      "visual_place_correction_backends",
+      std::vector<std::string>{"groundingdino_sam_foundationpose"});
+    declare_parameter(
       "visual_place_correction_excluded_colors", std::vector<std::string>{"white"});
     declare_parameter("observe_pose_xyz", std::vector<double>{0.45, -0.30, 0.50});
     declare_parameter(
@@ -219,6 +221,12 @@ public:
   std::string motion_mode() const
   {
     return get_parameter("motion_mode").as_string();
+  }
+
+  std::string visual_backend() const
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    return visual_backend_;
   }
 
   bool call_reset()
@@ -411,14 +419,16 @@ public:
     source.yaw_rad = yaw;
     const double offset = get_parameter("tool_yaw_offset_deg").as_double() * M_PI / 180.0;
     source.pose.orientation = down_orientation(yaw + offset);
+    const std::string backend = payload["backend"].as<std::string>("unknown");
     {
       std::lock_guard<std::mutex> lock(data_mutex_);
       visual_sources_[task.id] = source;
+      visual_backend_ = backend;
     }
     RCLCPP_INFO(
       get_logger(),
       "[%s] VISUAL_SOURCE backend=%s position=(%.4f, %.4f, %.4f) yaw=%.1fdeg score=%.3f",
-      task.id.c_str(), payload["backend"].as<std::string>("unknown").c_str(),
+      task.id.c_str(), backend.c_str(),
       source.pose.position.x, source.pose.position.y, source.pose.position.z,
       yaw * 180.0 / M_PI, selected_score);
     return true;
@@ -536,6 +546,7 @@ private:
   std::condition_variable data_cv_;
   YAML::Node goal_;
   YAML::Node state_;
+  std::string visual_backend_ = "unknown";
   std::map<std::string, BlockState> visual_sources_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr goal_subscription_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr state_subscription_;
@@ -1006,11 +1017,22 @@ bool execute_task(
       return false;
     }
   } else if (node.get_parameter("visual_place_correction").as_bool()) {
+    const auto enabled_backends =
+      node.get_parameter("visual_place_correction_backends").as_string_array();
+    const std::string backend = node.visual_backend();
     const auto excluded_colors =
       node.get_parameter("visual_place_correction_excluded_colors").as_string_array();
-    if (std::find(excluded_colors.begin(), excluded_colors.end(), task.color) !=
-      excluded_colors.end())
+    const bool color_excluded =
+      std::find(excluded_colors.begin(), excluded_colors.end(), task.color) !=
+      excluded_colors.end();
+    if (std::find(enabled_backends.begin(), enabled_backends.end(), backend) ==
+      enabled_backends.end())
     {
+      RCLCPP_WARN(
+        node.get_logger(),
+        "[%s] VISUAL_PLACE_CORRECTION_SKIPPED backend=%s is verification-only",
+        task.id.c_str(), backend.c_str());
+    } else if (color_excluded) {
       RCLCPP_WARN(
         node.get_logger(),
         "[%s] VISUAL_PLACE_CORRECTION_SKIPPED color=%s is excluded",
@@ -1090,6 +1112,11 @@ int main(int argc, char ** argv)
     arm.setNumPlanningAttempts(node->get_parameter("planning_attempts").as_int());
     arm.setMaxVelocityScalingFactor(node->get_parameter("velocity_scale").as_double());
     arm.setMaxAccelerationScalingFactor(node->get_parameter("acceleration_scale").as_double());
+    arm.startStateMonitor(5.0);
+    if (!arm.getCurrentState(5.0)) {
+      throw std::runtime_error("timed out waiting for the initial Panda joint state");
+    }
+    RCLCPP_INFO(node->get_logger(), "Initial Panda joint state is available");
     add_table(scene, arm.getPlanningFrame());
     std::this_thread::sleep_for(
       std::chrono::duration<double>(node->get_parameter("motion_settle_s").as_double()));

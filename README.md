@@ -10,7 +10,7 @@ The benchmark takes a product description in YAML, creates the required loose pa
 ## Features
 
 - Deterministic episode generation from a product YAML and integer seed
-- Non-overlapping random placement inside a fixed table workspace
+- Non-overlapping random positions with 0/90-degree source orientations
 - Panda arm and gripper control through `FollowJointTrajectory`
 - MoveIt 2 planning and trajectory execution
 - Ground-truth and RGB-D observation modes with an explicit no-oracle boundary
@@ -214,11 +214,15 @@ An integration skeleton is available in [examples/external_executor.py](examples
 
 ## Reference executor
 
-Episode generation writes `execution_plan.yaml`. The planner infers direct
-support relationships from target geometry, orders lower layers before upper
-layers, retains stable YAML IDs, and records the original 90-degree-first grasp
-accessibility preference. The C++ executor then runs this state machine for each
-part:
+Episode generation writes `execution_plan.yaml`. The planner follows the same
+reverse-disassembly strategy used by the original robot pipeline: it removes
+accessible upper parts first, records a face-aligned grasp for each removal,
+then reverses that list into a bottom-up assembly order. It preserves the YAML
+IDs and direct support relationships. Grasp angles are always either 0 or 90
+degrees in the part's local frame, with 90 degrees preferred when both finger
+corridors are clear. This distinction matters for rectangular 4x2 bricks and is
+not overridden by the executor. The C++ executor then runs this state machine
+for each part:
 
 ```text
 move above source
@@ -307,7 +311,7 @@ Query and save a result with:
 ros2 service call /mj_bridge/result std_srvs/srv/Trigger '{}'
 ```
 
-The episode directory contains the normalized product, episode manifest, generated MuJoCo scene, actual final state, and result JSON. The manifest is the complete record needed to reproduce the initial scene.
+The episode directory contains the normalized product, episode manifest, generated MuJoCo scene, actual final state, and result JSON. Loose-part positions are randomized from the seed while their initial yaw is sampled from 0 or 90 degrees. The manifest is the complete record needed to reproduce the initial scene.
 
 ## Batch experiments
 
@@ -379,7 +383,7 @@ Run a smaller subset while developing:
 
 ```bash
 python3 tests/run_e2e.py --product traffic_light --case geometry
-python3 tests/run_e2e.py --product bridge --case oracle
+python3 tests/run_e2e.py --product bridge --case oracle --seed 1
 ```
 
 ## License and third-party material

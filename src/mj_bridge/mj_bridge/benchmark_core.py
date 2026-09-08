@@ -19,6 +19,7 @@ ASSEMBLY_ORIGIN = (0.35, 0.35)
 BRICK_COLLISION_CENTER_OFFSET_Z = -0.009
 BASE_PLATE_TOP_Z = 0.046
 DEFAULT_SPAWN_REGION = {"x": [0.30, 0.68], "y": [-0.42, 0.12]}
+ORTHOGONAL_SPAWN_YAWS_RAD = (0.0, math.pi / 2.0)
 
 
 class ProductError(ValueError):
@@ -181,7 +182,7 @@ def generate_episode(product: dict, *, seed: int, registry: dict | None = None,
         spec = registry[block["type"]]
         size = [float(v) for v in spec["size_m"]]
         for _ in range(max_attempts):
-            yaw = rng.uniform(-math.pi, math.pi)
+            yaw = rng.choice(ORTHOGONAL_SPAWN_YAWS_RAD)
             # Sample conservatively away from table edges; exact rotated AABB is checked below.
             x = rng.uniform(float(region["x"][0]), float(region["x"][1]))
             y = rng.uniform(float(region["y"][0]), float(region["y"][1]))
@@ -216,6 +217,7 @@ def generate_episode(product: dict, *, seed: int, registry: dict | None = None,
         "schema_version": 1,
         "episode_id": f"{product['product']['name']}-seed-{int(seed)}",
         "seed": int(seed), "product": product, "spawn_region": region,
+        "spawn_yaw_choices_deg": [0.0, 90.0],
         "spawned_blocks": spawned, "target_blocks": targets,
     }
 

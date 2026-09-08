@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from math import cos, radians, sin
 
 from .benchmark_core import load_registry, validate_product
 
@@ -45,64 +46,101 @@ def _support_graph(product: dict, registry: dict) -> dict[str, set[str]]:
     return dependencies
 
 
-def _grasp_spin(block: dict, blocks: list[dict]) -> float:
-    """Preserve the original planner's 90-degree-first accessibility policy."""
-    x, y, z = (float(v) for v in block["target"]["position"])
-    same_level = [
-        other
-        for other in blocks
-        if other["id"] != block["id"]
-        and abs(float(other["target"]["position"][2]) - z) < 0.01
-    ]
-    x_blocked = any(
-        abs(float(other["target"]["position"][1]) - y) < 0.005
-        and abs(float(other["target"]["position"][0]) - x) < 0.045
-        for other in same_level
+def _local_offset(block: dict, other: dict) -> tuple[float, float]:
+    """Return another block's offset in the candidate block's XY frame."""
+    x, y, _ = (float(value) for value in block["target"]["position"])
+    other_x, other_y, _ = (
+        float(value) for value in other["target"]["position"]
     )
-    if not x_blocked:
+    yaw = radians(float(block["target"].get("yaw_deg", 0.0)))
+    dx = other_x - x
+    dy = other_y - y
+    return cos(yaw) * dx + sin(yaw) * dy, -sin(yaw) * dx + cos(yaw) * dy
+
+
+def _grasp_accessible(block: dict, scene_blocks: list[dict], spin_deg: float) -> bool:
+    """Check the selected finger corridor in the block's local frame."""
+    z = float(block["target"]["position"][2])
+    for other in scene_blocks:
+        if other["id"] == block["id"]:
+            continue
+        if abs(float(other["target"]["position"][2]) - z) >= 0.01:
+            continue
+        local_x, local_y = _local_offset(block, other)
+        if spin_deg == 90.0:
+            blocked = abs(local_y) < 0.005 and abs(local_x) < 0.045
+        else:
+            blocked = abs(local_x) < 0.005 and abs(local_y) < 0.045
+        if blocked:
+            return False
+    return True
+
+
+def _grasp_spin(block: dict, scene_blocks: list[dict]) -> float:
+    """Choose 90 then 0 degrees relative to the block's own frame."""
+    if _grasp_accessible(block, scene_blocks, 90.0):
         return 90.0
-    y_blocked = any(
-        abs(float(other["target"]["position"][0]) - x) < 0.005
-        and abs(float(other["target"]["position"][1]) - y) < 0.045
-        for other in same_level
-    )
-    return 0.0 if not y_blocked else 90.0
+    if _grasp_accessible(block, scene_blocks, 0.0):
+        return 0.0
+    return 90.0
 
 
 def plan_assembly(product: dict, registry: dict | None = None) -> dict:
-    """Create a stable bottom-up plan while retaining explicit product IDs."""
+    """Plan reverse disassembly, then invert it into a stable assembly order."""
     registry = registry or load_registry()
     validate_product(product, registry)
     blocks = product["blocks"]
     by_id = {block["id"]: block for block in blocks}
     dependencies = _support_graph(product, registry)
+    input_index = {block["id"]: index for index, block in enumerate(blocks)}
     remaining = set(by_id)
-    completed: set[str] = set()
-    ordered: list[dict] = []
+    disassembly: list[tuple[str, float]] = []
 
     while remaining:
-        ready = [block_id for block_id in remaining if dependencies[block_id] <= completed]
-        if not ready:
+        removable = [
+            block_id
+            for block_id in remaining
+            if not any(
+                block_id in dependencies[other_id]
+                for other_id in remaining
+                if other_id != block_id
+            )
+        ]
+        if not removable:
             raise ValueError("product contains an unresolved or cyclic support relationship")
-        ready.sort(key=lambda block_id: (
-            float(by_id[block_id]["target"]["position"][2]),
-            blocks.index(by_id[block_id]),
+        removable.sort(key=lambda block_id: (
+            -float(by_id[block_id]["target"]["position"][2]),
+            input_index[block_id],
             block_id,
         ))
-        block_id = ready[0]
+        scene_blocks = [by_id[block_id] for block_id in remaining]
+        selected_id = removable[0]
+        selected_spin = 90.0
+        for block_id in removable:
+            block = by_id[block_id]
+            spin = _grasp_spin(block, scene_blocks)
+            if _grasp_accessible(block, scene_blocks, spin):
+                selected_id = block_id
+                selected_spin = spin
+                break
+        disassembly.append((selected_id, selected_spin))
+        remaining.remove(selected_id)
+
+    ordered: list[dict] = []
+    for block_id, grasp_spin in reversed(disassembly):
         block = by_id[block_id]
         ordered.append({
             "id": block_id,
             "type": block["type"],
             "color": block.get("color", "gray"),
-            "grasp_spin_deg": _grasp_spin(block, blocks),
+            "grasp_spin_deg": grasp_spin,
             "depends_on": sorted(dependencies[block_id]),
         })
-        remaining.remove(block_id)
-        completed.add(block_id)
 
     return {
         "schema_version": 1,
         "product": product["product"],
+        "planning_strategy": "reverse_disassembly_90_first",
+        "grasp_angle_frame": "part_local",
         "steps": ordered,
     }
