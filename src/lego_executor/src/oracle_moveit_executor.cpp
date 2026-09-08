@@ -145,9 +145,8 @@ public:
     declare_parameter("place_speed_scale", 0.30);
     declare_parameter("place_acceleration_scale", 0.20);
     declare_parameter("lift_speed_scale", 0.55);
-    declare_parameter("transport_rotation_speed_scale", 0.30);
     declare_parameter("transport_velocity_scale", 0.95);
-    declare_parameter("transport_acceleration_scale", 0.45);
+    declare_parameter("transport_acceleration_scale", 0.20);
     declare_parameter("large_part_motion_scale", 0.65);
     declare_parameter("large_part_transport_scale", 0.90);
     declare_parameter("gripper_open_m", 0.04);
@@ -572,13 +571,6 @@ bool move_cartesian_path(
   double speed_scale,
   double acceleration_scale = -1.0);
 
-bool move_axis_aligned_to_pose(
-  ExecutorNode & node,
-  moveit::planning_interface::MoveGroupInterface & arm,
-  const geometry_msgs::msg::Pose & target,
-  double speed_scale,
-  double acceleration_scale = -1.0);
-
 bool move_to_pose(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
@@ -599,9 +591,6 @@ bool move_to_pose(
       node.get_logger(),
       "%s: direct Cartesian point-to-point motion (speed=%.3f, acceleration=%.3f)",
       label.c_str(), speed, acceleration);
-    if (keep_tool_down && label == "preplace") {
-      return move_axis_aligned_to_pose(node, arm, pose, speed, acceleration);
-    }
     return move_linear_to_pose(node, arm, pose, speed, acceleration);
   }
 
@@ -650,10 +639,6 @@ bool move_to_pose(
     fallback_acceleration =
       node.get_parameter("transport_acceleration_scale").as_double() * payload_scale;
   }
-  if (keep_tool_down) {
-    return move_axis_aligned_to_pose(
-      node, arm, pose, fallback_speed, fallback_acceleration);
-  }
   return move_linear_to_pose(
     node, arm, pose, fallback_speed, fallback_acceleration);
 }
@@ -665,6 +650,29 @@ bool move_linear_to_pose(
   double speed_scale,
   double acceleration_scale)
 {
+  const geometry_msgs::msg::Pose current = arm.getCurrentPose().pose;
+  const double translation = std::hypot(
+    std::hypot(
+      target.position.x - current.position.x,
+      target.position.y - current.position.y),
+    target.position.z - current.position.z);
+  const double quaternion_dot = std::clamp(
+    std::abs(
+      target.orientation.x * current.orientation.x +
+      target.orientation.y * current.orientation.y +
+      target.orientation.z * current.orientation.z +
+      target.orientation.w * current.orientation.w),
+    0.0, 1.0);
+  const double rotation = 2.0 * std::acos(quaternion_dot);
+  if (translation < 5.0e-4 && rotation < 0.5 * M_PI / 180.0) {
+    RCLCPP_INFO(node.get_logger(), "CARTESIAN_LINE skipped no-op target");
+    return true;
+  }
+  RCLCPP_INFO(
+    node.get_logger(),
+    "CARTESIAN_LINE target=(%.3f, %.3f, %.3f) distance=%.3fm rotation=%.1fdeg",
+    target.position.x, target.position.y, target.position.z,
+    translation, rotation * 180.0 / M_PI);
   return move_cartesian_path(node, arm, {target}, speed_scale, acceleration_scale);
 }
 
@@ -696,55 +704,6 @@ bool move_cartesian_path(
   }
   trajectory.getRobotTrajectoryMsg(trajectory_message);
   return arm.execute(trajectory_message) == moveit::core::MoveItErrorCode::SUCCESS;
-}
-
-bool move_axis_aligned_to_pose(
-  ExecutorNode & node,
-  moveit::planning_interface::MoveGroupInterface & arm,
-  const geometry_msgs::msg::Pose & target,
-  double speed_scale,
-  double acceleration_scale)
-{
-  geometry_msgs::msg::Pose waypoint = arm.getCurrentPose().pose;
-  const geometry_msgs::msg::Pose start = waypoint;
-  std::vector<geometry_msgs::msg::Pose> waypoints;
-  auto append_if_changed = [&waypoints, &start](const geometry_msgs::msg::Pose & candidate) {
-      const auto & previous = waypoints.empty() ? start : waypoints.back();
-      const double translation = std::hypot(
-        std::hypot(
-          candidate.position.x - previous.position.x,
-          candidate.position.y - previous.position.y),
-        candidate.position.z - previous.position.z);
-      const double quaternion_dot = std::abs(
-        candidate.orientation.x * previous.orientation.x +
-        candidate.orientation.y * previous.orientation.y +
-        candidate.orientation.z * previous.orientation.z +
-        candidate.orientation.w * previous.orientation.w);
-      if (translation > 1.0e-6 || quaternion_dot < 1.0 - 1.0e-8) {
-        waypoints.push_back(candidate);
-      }
-    };
-  waypoint.orientation = target.orientation;
-  waypoint.position.z = std::max(waypoint.position.z, target.position.z);
-  const double safe_x = std::max({waypoint.position.x, target.position.x, 0.50});
-  RCLCPP_INFO(
-    node.get_logger(),
-    "CARTESIAN_PTP safe_x=%.3f target=(%.3f, %.3f, %.3f)",
-    safe_x, target.position.x, target.position.y, target.position.z);
-
-  append_if_changed(waypoint);
-  waypoint.position.x = safe_x;
-  append_if_changed(waypoint);
-  waypoint.position.y = target.position.y;
-  append_if_changed(waypoint);
-  waypoint.position.x = target.position.x;
-  append_if_changed(waypoint);
-  waypoint.position.z = target.position.z;
-  append_if_changed(waypoint);
-  RCLCPP_INFO(
-    node.get_logger(), "CARTESIAN_PTP executing %zu segments as one trajectory",
-    waypoints.size());
-  return move_cartesian_path(node, arm, waypoints, speed_scale, acceleration_scale);
 }
 
 bool move_linear(
@@ -782,7 +741,7 @@ bool move_to_observe(
   target.orientation = down_orientation(M_PI / 2.0);
 
   if (node.motion_mode() == "cartesian") {
-    if (!move_axis_aligned_to_pose(
+    if (!move_linear_to_pose(
         node, arm, target, node.get_parameter("cartesian_speed_scale").as_double()))
     {
       return false;
@@ -872,8 +831,6 @@ bool execute_task(
   const double place_acceleration =
     node.get_parameter("place_acceleration_scale").as_double();
   const double lift_speed = node.get_parameter("lift_speed_scale").as_double();
-  const double rotation_speed =
-    node.get_parameter("transport_rotation_speed_scale").as_double();
   const double transport_velocity =
     node.get_parameter("transport_velocity_scale").as_double();
   const double transport_acceleration =
@@ -961,15 +918,6 @@ bool execute_task(
       RCLCPP_ERROR(node.get_logger(), "[%s] lift verification failed", task.id.c_str());
       return false;
     }
-  }
-
-  geometry_msgs::msg::Pose aligned_for_transport = arm.getCurrentPose().pose;
-  aligned_for_transport.orientation = down_orientation(target_tool_yaw);
-  RCLCPP_INFO(node.get_logger(), "[%s] ALIGN_TOOL_FOR_PLACE", task.id.c_str());
-  if (!move_linear_to_pose(
-      node, arm, aligned_for_transport, rotation_speed * large_part_scale))
-  {
-    return false;
   }
 
   geometry_msgs::msg::Pose preplace = task.target;

@@ -24,7 +24,6 @@ TASK_STATES = (
     "CLOSE_GRIPPER",
     "GRASP_CONFIRMED",
     "LIFT",
-    "ALIGN_TOOL_FOR_PLACE",
     "MOVE_TO_PREPLACE",
     "DESCEND_TO_TARGET",
     "OPEN_GRIPPER",
@@ -386,9 +385,13 @@ def run_case(repo: Path, session_dir: Path, case_name: str, product_name: str,
                 raise EndToEndFailure(
                     f"{label}: direct Cartesian motion was not exercised"
                 )
-            if "CARTESIAN_PTP executing" not in log_text:
+            if "CARTESIAN_LINE target=" not in log_text:
                 raise EndToEndFailure(
-                    f"{label}: consolidated Cartesian corridor was not exercised"
+                    f"{label}: single-target Cartesian lines were not exercised"
+                )
+            if "CARTESIAN_PTP" in log_text:
+                raise EndToEndFailure(
+                    f"{label}: legacy multi-segment corridor motion was executed"
                 )
             if planning_marker in log_text:
                 raise EndToEndFailure(

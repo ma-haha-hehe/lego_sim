@@ -22,13 +22,11 @@ while rectangular bricks use the planner's selected 0- or 90-degree local
 grasp. Transfers use the nearest yaw that is equivalent under the part's 90- or
 180-degree symmetry, which avoids unnecessary wrist rotation while preserving
 the YAML target.
-The default motion mode uses axis-aligned Cartesian segments through a clear X
-corridor for observation and overhead transfer. Grasp approach, lift,
-placement, and retreat are Cartesian as well, so no OMPL route is generated.
-All corridor segments are executed as one continuous trajectory to avoid a
-controller restart at every corner. The 10 cm approach clearance keeps the
-same calibrated grasp and release endpoints while shortening each vertical
-stroke.
+The default motion mode sends one straight Cartesian line for each observation,
+approach, lift, overhead transfer, placement, and retreat state, so no OMPL
+route or intermediate corridor waypoint is generated. The 10 cm approach
+clearance keeps the calibrated grasp and release endpoints while shortening
+each vertical stroke.
 Use `--motion-mode moveit` to make the original collision-aware planner handle
 observation and overhead transfer; the direct route remains its fallback.
 

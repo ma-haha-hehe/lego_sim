@@ -232,24 +232,21 @@ move above source
   -> descend vertically
   -> close gripper and confirm dual-fingertip contact
   -> lift vertically back to the source approach height
-  -> move above target
-  -> align the carried part with a Cartesian segment
+  -> move directly above target while setting its target yaw
   -> descend vertically
   -> open gripper
   -> retreat vertically
 ```
 
-The default `cartesian` motion mode bypasses OMPL. Motion to the source and
-target approach poses is split into axis-aligned Cartesian point-to-point
-segments through a clear overhead corridor; approach, lift, carried-part
-alignment, placement, and retreat are also direct Cartesian segments. Collision
-checking is disabled for these paths. MoveIt still supplies robot kinematics,
-trajectory timing, and execution, but does not choose the route.
-
-The corridor waypoints are timed and sent to the controller as one continuous
-trajectory rather than a series of stop-start actions. Empty moves run at a
-higher speed than contact and payload motions; the latter retain separate
-acceleration limits so long bricks remain stable in the gripper.
+The default `cartesian` motion mode bypasses OMPL. Every state sends one direct
+Cartesian line from the current pose to its target pose. Approach, lift,
+placement, and retreat are vertical lines; observation, pre-grasp, and overhead
+transport are single point-to-point lines. Collision checking is disabled for
+these paths. MoveIt still supplies robot kinematics, trajectory timing, and
+execution, but does not choose the route. Empty moves run at a higher speed than
+contact and payload motions; the latter retain separate acceleration limits so
+long bricks remain stable in the gripper. Targets already reached within the
+motion tolerance are skipped instead of sending a redundant trajectory.
 
 Pass `--motion-mode moveit` to restore collision-aware planning for the source
 and target approach poses. The vertical manipulation strokes remain Cartesian
