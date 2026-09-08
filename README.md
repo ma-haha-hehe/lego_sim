@@ -53,11 +53,20 @@ lego-bench generate \
   --output-dir runs/traffic-light-42
 ```
 
-Run the complete reference pipeline (episode generation, MuJoCo, MoveIt,
-planning, execution, and result export):
+Run the complete reference pipeline (episode generation, MuJoCo, direct
+Cartesian execution, and result export):
 
 ```bash
 ./run_reference_pipeline.sh --headless
+```
+
+Direct Cartesian point-to-point motion is the default. It disables general
+obstacle planning and joins each manipulation waypoint with simple straight
+segments. Select the original MoveIt/OMPL planner for the overhead motions when
+an experiment requires collision-aware planning:
+
+```bash
+./run_reference_pipeline.sh --motion-mode moveit --headless
 ```
 
 Remove `--headless` to open MuJoCo and RViz. The launch remains open after the
@@ -224,15 +233,18 @@ move above source
   -> retreat vertically
 ```
 
-Only the source-to-target overhead transfers use general motion planning.
-Approach, lift, carried-part alignment, placement, and retreat are Cartesian
-paths. A lift does not begin until the simulator reports sustained contact on
-both fingertips with the requested part.
+The default `cartesian` motion mode bypasses OMPL. Motion to the source and
+target approach poses is split into axis-aligned Cartesian point-to-point
+segments through a clear overhead corridor; approach, lift, carried-part
+alignment, placement, and retreat are also direct Cartesian segments. Collision
+checking is disabled for these paths. MoveIt still supplies robot kinematics,
+trajectory timing, and execution, but does not choose the route.
 
-Overhead transfers try MoveIt planning first. If all planning attempts fail,
-the reference executor falls back to a direct Cartesian point-to-point motion
-with collision checking disabled. Vertical approach and retreat segments always
-use direct Cartesian motion and do not invoke the OMPL planner.
+Pass `--motion-mode moveit` to restore collision-aware planning for the source
+and target approach poses. The vertical manipulation strokes remain Cartesian
+in both modes. If MoveIt planning fails, the same direct point-to-point route is
+used as a fallback. A lift never begins until the simulator reports sustained
+contact on both fingertips with the requested part.
 
 Reference motion speed, Cartesian speed, gripper duration, and the short
 state-publication delays between actions are configured in

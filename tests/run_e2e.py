@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -125,6 +126,7 @@ def assert_state_order(log_text: str, block_ids: list[str], visual: bool) -> Non
         if visual:
             for marker in (
                 "MOVE_TO_OBSERVE",
+                "OBSERVE_REACHED",
                 "Perception completed",
                 f"[{block_id}] VISUAL_SOURCE",
             ):
@@ -134,6 +136,20 @@ def assert_state_order(log_text: str, block_ids: list[str], visual: bool) -> Non
                         f"execution log is missing {marker} for {block_id}"
                     )
                 cursor = position
+        alignment_pattern = re.compile(
+            rf"\[{re.escape(block_id)}\] GRASP_FACE_ALIGNMENT .*face_spin=(-?\d+)deg"
+        )
+        alignment = alignment_pattern.search(log_text, cursor + 1)
+        if alignment is None:
+            raise EndToEndFailure(
+                f"execution log is missing face-aligned grasp for {block_id}"
+            )
+        face_spin = int(alignment.group(1)) % 180
+        if face_spin not in (0, 90):
+            raise EndToEndFailure(
+                f"grasp for {block_id} is not aligned with a part face: {face_spin} deg"
+            )
+        cursor = alignment.start()
         for state in TASK_STATES:
             marker = f"[{block_id}] {state}"
             position = log_text.find(marker, cursor + 1)
@@ -289,7 +305,7 @@ def validate_result(label: str, case: dict, result: dict, run_dir: Path,
 
 
 def run_case(repo: Path, session_dir: Path, case_name: str, product_name: str,
-             timeout_s: float, domain_id: int) -> dict:
+             motion_mode: str, timeout_s: float, domain_id: int) -> dict:
     case = CASES[case_name]
     label = f"{product_name}-{case_name}"
     run_dir = session_dir / label
@@ -301,6 +317,7 @@ def run_case(repo: Path, session_dir: Path, case_name: str, product_name: str,
         "--seed", "42",
         "--output-dir", str(run_dir),
         "--connection-mode", "physics",
+        "--motion-mode", motion_mode,
         "--headless",
         *case["arguments"],
     ]
@@ -326,12 +343,29 @@ def run_case(repo: Path, session_dir: Path, case_name: str, product_name: str,
             )
             result = wait_for_result(process, run_dir / "result.json", timeout_s)
         log_text = wait_for_final_log(process, log_path)
+        if f"motion_mode={motion_mode}" not in log_text:
+            raise EndToEndFailure(
+                f"{label}: executor did not report motion_mode={motion_mode}"
+            )
+        planning_marker = "Combined planning and execution request received"
+        if motion_mode == "cartesian":
+            if "direct Cartesian point-to-point motion" not in log_text:
+                raise EndToEndFailure(
+                    f"{label}: direct Cartesian motion was not exercised"
+                )
+            if planning_marker in log_text:
+                raise EndToEndFailure(
+                    f"{label}: cartesian mode unexpectedly invoked general planning"
+                )
+        elif planning_marker not in log_text:
+            raise EndToEndFailure(f"{label}: MoveIt planning was not exercised")
         block_ids = execution_order(run_dir)
         assert_state_order(log_text, block_ids, case_name == "geometry")
         validate_result(label, case, result, run_dir, block_ids)
         return {
             "case": case_name,
             "product": product_name,
+            "motion_mode": motion_mode,
             "label": label,
             "passed": True,
             "wall_time_s": round(time.monotonic() - started, 3),
@@ -363,6 +397,12 @@ def parse_arguments(argv=None):
         help="product to assemble (default: all products)",
     )
     parser.add_argument("--timeout-s", type=float, default=300.0)
+    parser.add_argument(
+        "--motion-mode",
+        choices=("cartesian", "moveit"),
+        default="cartesian",
+        help="executor motion mode (default: cartesian)",
+    )
     parser.add_argument("--domain-id", type=int)
     parser.add_argument("--output-root", default="runs/e2e")
     return parser.parse_args(argv)
@@ -403,6 +443,7 @@ def main(argv=None) -> int:
             ["git", "rev-parse", "HEAD"], cwd=repo, text=True
         ).strip(),
         "ros_domain_id": domain_id,
+        "motion_mode": arguments.motion_mode,
         "cases": [],
     }
     print(f"E2E output: {session_dir}", flush=True)
@@ -415,7 +456,7 @@ def main(argv=None) -> int:
         try:
             case_report = run_case(
                 repo, session_dir, case_name, product_name,
-                arguments.timeout_s, case_domain_id
+                arguments.motion_mode, arguments.timeout_s, case_domain_id
             )
         except EndToEndFailure as error:
             report["failure"] = {"case": label, "message": str(error)}

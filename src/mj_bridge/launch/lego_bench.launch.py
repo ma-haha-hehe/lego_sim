@@ -19,9 +19,12 @@ def launch_setup(context):
     headless = LaunchConfiguration("headless")
     observation = LaunchConfiguration("observation").perform(context)
     connection_mode = LaunchConfiguration("connection_mode").perform(context)
+    motion_mode = LaunchConfiguration("motion_mode").perform(context)
     executor_mode = LaunchConfiguration("executor").perform(context)
     vision_backend = LaunchConfiguration("vision_backend").perform(context)
     foundationpose_root = LaunchConfiguration("foundationpose_root").perform(context)
+    if motion_mode not in {"cartesian", "moveit"}:
+        raise RuntimeError("motion_mode must be cartesian or moveit")
     _, scene = generate(product, seed, output_dir)
 
     moveit_config = (
@@ -120,6 +123,7 @@ def launch_setup(context):
             package="lego_executor", executable="oracle_moveit_executor", output="screen",
             parameters=[moveit_config.to_dict(), executor_config, {
                 "plan_file": str(Path(output_dir).resolve() / "execution_plan.yaml"),
+                "motion_mode": motion_mode,
             }],
         ))
     elif executor_mode == "vision":
@@ -141,6 +145,7 @@ def launch_setup(context):
             name="visual_moveit_executor", output="screen",
             parameters=[moveit_config.to_dict(), executor_config, {
                 "plan_file": str(Path(output_dir).resolve() / "execution_plan.yaml"),
+                "motion_mode": motion_mode,
             }],
         ))
     return nodes
@@ -158,6 +163,7 @@ def generate_launch_description():
         DeclareLaunchArgument("headless", default_value="false"),
         DeclareLaunchArgument("observation", default_value="oracle"),
         DeclareLaunchArgument("connection_mode", default_value="physics"),
+        DeclareLaunchArgument("motion_mode", default_value="cartesian"),
         DeclareLaunchArgument("executor", default_value="none"),
         DeclareLaunchArgument("vision_backend", default_value="foundationpose"),
         DeclareLaunchArgument(

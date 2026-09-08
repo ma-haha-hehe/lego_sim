@@ -10,14 +10,20 @@ RGB image -> GroundingDINO -> SAM -> FoundationPose -> world pose
                                                     -> pick-and-place executor
 ```
 
-Before each pick, the Panda returns to a fixed joint configuration with its tool
-above the robot-side edge of the loose-part workspace at approximately
-`[0.45, -0.35, 0.50]`. Fixing the joint configuration, rather than solving the
-Cartesian point again, prevents the redundant Panda arm from choosing an elbow
-pose that covers the remaining parts. The vision service then processes the
-newest RGB-D frame, returns the matching source-part pose, and the executor runs
-the normal pick-and-place state machine. Transfers use MoveIt; grasp approach,
-lift, placement and retreat are Cartesian paths.
+Before each pick, the Panda returns to a fixed view above the loose-part
+workspace, shifted slightly toward the assembly plate, at approximately
+`[0.45, -0.30, 0.50]`. The visual service then
+processes the newest RGB-D frame, returns the matching source-part pose, and the
+executor runs the normal pick-and-place state machine. Gripper yaw is aligned
+with a detected part face: square bricks may use either orthogonal face pair,
+while rectangular bricks are clamped across their shorter width. Transfers use
+the nearest yaw that is equivalent under the part's 90- or 180-degree symmetry,
+which avoids unnecessary wrist rotation while preserving the YAML target.
+The default motion mode uses axis-aligned Cartesian segments through a clear X
+corridor for observation and overhead transfer. Grasp approach, lift,
+placement, and retreat are Cartesian as well, so no OMPL route is generated.
+Use `--motion-mode moveit` to make the original collision-aware planner handle
+observation and overhead transfer; the direct route remains its fallback.
 
 Camera rendering is on demand when the supplied visual executor is active. The
 source service requests an overhead frame after the arm stops at the observation
@@ -88,6 +94,9 @@ Run a complete visual episode with:
   --output-dir runs/visual-traffic-light-42 \
   --headless
 ```
+
+Add `--motion-mode moveit` to run the same visual state machine with the
+collision-aware planner. Omitting the option keeps the direct Cartesian mode.
 
 FoundationPose registration uses five refinement iterations by default to keep
 the perception pause short. Change the `register_iterations` ROS parameter if a

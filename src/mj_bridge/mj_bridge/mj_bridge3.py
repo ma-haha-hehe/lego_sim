@@ -1923,19 +1923,29 @@ class MuJoCoActionServer(Node):
         current_offset = hand_rotation.T @ (
             block_collision_center_world(self.data, body_id) - grasp_center
         )
-        finger_ids = {
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
-            for name in ("hand", "left_finger", "right_finger")
+        support_ids = {
+            mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, ASSEMBLY_BASE_NAME
+            )
         }
+        for weld in self.fake_welds:
+            child = str(weld.get("child", ""))
+            if child and child != self.grasped_block:
+                support_ids.add(
+                    mujoco.mj_name2id(
+                        self.model, mujoco.mjtObj.mjOBJ_BODY, child
+                    )
+                )
+        support_ids.discard(-1)
         support_contact = False
         for index in range(self.data.ncon):
             contact = self.data.contact[index]
             body1 = int(self.model.geom_bodyid[contact.geom1])
             body2 = int(self.model.geom_bodyid[contact.geom2])
-            if body1 == body_id and body2 not in finger_ids:
+            if body1 == body_id and body2 in support_ids:
                 support_contact = True
                 break
-            if body2 == body_id and body1 not in finger_ids:
+            if body2 == body_id and body1 in support_ids:
                 support_contact = True
                 break
         if support_contact:

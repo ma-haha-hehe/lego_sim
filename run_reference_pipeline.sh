@@ -8,6 +8,7 @@ OUTPUT_DIR="${REPO_DIR}/runs/reference-seed-42"
 HEADLESS=false
 OBSERVATION=oracle
 CONNECTION_MODE=physics
+MOTION_MODE=cartesian
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -16,15 +17,22 @@ while [[ $# -gt 0 ]]; do
     --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --observation) OBSERVATION="$2"; shift 2 ;;
     --connection-mode) CONNECTION_MODE="$2"; shift 2 ;;
+    --motion-mode) MOTION_MODE="$2"; shift 2 ;;
     --headless) HEADLESS=true; shift ;;
     -h|--help)
       echo "Usage: $0 [--product FILE] [--seed N] [--output-dir DIR] [--headless]"
       echo "          [--observation oracle|rgbd] [--connection-mode snap|physics]"
+      echo "          [--motion-mode cartesian|moveit]"
       exit 0
       ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+case "${MOTION_MODE}" in
+  cartesian|moveit) ;;
+  *) echo "--motion-mode must be cartesian or moveit." >&2; exit 2 ;;
+esac
 
 set +u
 source "${REPO_DIR}/enter_sim_env.sh" >/dev/null
@@ -37,4 +45,5 @@ exec ros2 launch mj_bridge lego_bench.launch.py \
   headless:="${HEADLESS}" \
   observation:="${OBSERVATION}" \
   connection_mode:="${CONNECTION_MODE}" \
+  motion_mode:="${MOTION_MODE}" \
   executor:=oracle

@@ -30,8 +30,11 @@ Run the supplied reference executor:
 ./run_reference_pipeline.sh --headless
 ```
 
-The script accepts `--product`, `--seed`, `--output-dir`, `--observation`, and
-`--connection-mode`. It expects the workspace to have been built first.
+The script accepts `--product`, `--seed`, `--output-dir`, `--observation`,
+`--connection-mode`, and `--motion-mode`. The default motion mode is
+`cartesian`: direct point-to-point segments with no obstacle planning. Use
+`--motion-mode moveit` to restore MoveIt/OMPL planning for overhead moves. It
+expects the workspace to have been built first.
 
 Start an episode for an external method:
 
@@ -43,6 +46,7 @@ ros2 launch mj_bridge lego_bench.launch.py \
   headless:=true \
   observation:=oracle \
   connection_mode:=physics \
+  motion_mode:=cartesian \
   executor:=none
 ```
 

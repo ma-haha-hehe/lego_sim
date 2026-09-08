@@ -18,12 +18,14 @@ oracle_moveit_executor:
     # Wrist rotation is the highest torsional load on a held brick. Keep this
     # stage conservative while allowing the translation stages to stay fast.
     transport_rotation_speed_scale: 0.12
-    transport_velocity_scale: 0.50
-    transport_acceleration_scale: 0.08
-    large_part_motion_scale: 1.0
+    transport_velocity_scale: 0.40
+    transport_acceleration_scale: 0.04
+    # Long bricks need lower Cartesian acceleration because the contact point
+    # is farther from the part centre than it is for a square brick.
+    large_part_motion_scale: 0.65
     gripper_open_m: 0.04
-    gripper_closed_m: 0.012
-    gripper_duration_s: 0.35
+    gripper_closed_m: 0.010
+    gripper_duration_s: 0.40
     motion_settle_s: 0.10
     release_settle_s: 0.20
     grasp_confirmation_timeout_s: 5.0
@@ -31,6 +33,8 @@ oracle_moveit_executor:
     # the tool X axis. Zero offset therefore puts both pads parallel to the
     # part sides instead of pinching two corners.
     tool_yaw_offset_deg: 0.0
+    # Keep a carried part upright during both planned and fallback transfers.
+    tool_tilt_tolerance_rad: 0.08
     verify_lift_m: 0.025
     # Keep the tool axis on the estimated geometric centre of every part.
     grasp_offset_xy: [0.0, 0.0]
@@ -72,6 +76,7 @@ visual_moveit_executor:
     motion_settle_s: 0.08
     release_settle_s: 0.15
     tool_yaw_offset_deg: 0.0
+    tool_tilt_tolerance_rad: 0.08
     perception_service: /lego_vision/detect
     placement_perception_service: /lego_vision/detect_placement
     visual_place_correction: true
@@ -79,13 +84,13 @@ visual_moveit_executor:
     # White parts merge with the white Panda hand in the lightweight colour
     # backend. FoundationPose users can clear this list after mask validation.
     visual_place_correction_excluded_colors: [white]
-    # Robot-side edge of the loose-part workspace at the hardware pipeline's
-    # observation height. The offset leaves the overhead camera view clear.
-    observe_pose_xyz: [0.45, -0.35, 0.50]
+    # Above the loose-part workspace, shifted toward the assembly plate so the
+    # full source region remains close to the centre of the wrist-camera view.
+    observe_pose_xyz: [0.45, -0.30, 0.50]
     # A fixed joint target keeps the elbow out of the overhead camera view.
     # Re-solving the same Cartesian pose can otherwise select a different IK
     # branch after each placement and occlude the remaining loose parts.
-    observe_joint_positions: [-2.435602, -0.169040, 1.699489, -1.853112, 0.175230, 1.871465, -1.571720]
+    observe_joint_positions: [-2.346649, 0.253827, 1.862806, -1.956540, -0.255224, 1.873248, -1.182563]
     # Vision returns the part centre; do not bias the grasp toward an edge.
     grasp_offset_xy: [0.0, 0.0]
     place_offset_xy: [0.0, 0.0]

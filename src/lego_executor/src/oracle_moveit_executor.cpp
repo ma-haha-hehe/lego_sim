@@ -58,6 +58,7 @@ struct BlockState
   std::string id;
   std::string type;
   std::string color;
+  double yaw_rad{0.0};
   geometry_msgs::msg::Pose pose;
 };
 
@@ -67,6 +68,7 @@ struct Task
   std::string type;
   std::string color;
   double grasp_spin_deg{90.0};
+  double target_yaw_rad{0.0};
   geometry_msgs::msg::Pose target;
 };
 
@@ -87,6 +89,26 @@ double yaw_from_wxyz(const YAML::Node & value)
   const double y = value[2].as<double>();
   const double z = value[3].as<double>();
   return std::atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z));
+}
+
+double face_aligned_spin_rad(const std::string & type, double requested_spin_deg)
+{
+  // Clamp rectangular bricks across their 32 mm width.  A square brick may
+  // use either pair of faces according to the assembly accessibility plan.
+  if (type == "brick_4x2") {
+    return 0.0;
+  }
+  constexpr double right_angle_deg = 90.0;
+  const double snapped_deg =
+    std::round(requested_spin_deg / right_angle_deg) * right_angle_deg;
+  return snapped_deg * M_PI / 180.0;
+}
+
+double nearest_symmetric_yaw(
+  double reference_yaw, double target_yaw, const std::string & type)
+{
+  const double symmetry = type == "brick_2x2" ? M_PI / 2.0 : M_PI;
+  return target_yaw + std::round((reference_yaw - target_yaw) / symmetry) * symmetry;
 }
 
 std::vector<double> dimensions_for(const std::string & type)
@@ -130,19 +152,21 @@ public:
     declare_parameter("release_settle_s", 0.20);
     declare_parameter("grasp_confirmation_timeout_s", 5.0);
     declare_parameter("tool_yaw_offset_deg", 45.0);
+    declare_parameter("tool_tilt_tolerance_rad", 0.08);
     declare_parameter("verify_lift_m", 0.025);
     declare_parameter("source_mode", "oracle");
+    declare_parameter("motion_mode", "cartesian");
     declare_parameter("perception_service", "/lego_vision/detect");
     declare_parameter("placement_perception_service", "/lego_vision/detect_placement");
     declare_parameter("visual_place_correction", true);
     declare_parameter("visual_place_correction_iterations", 2);
     declare_parameter(
       "visual_place_correction_excluded_colors", std::vector<std::string>{"white"});
-    declare_parameter("observe_pose_xyz", std::vector<double>{0.45, -0.35, 0.50});
+    declare_parameter("observe_pose_xyz", std::vector<double>{0.45, -0.30, 0.50});
     declare_parameter(
       "observe_joint_positions",
-      std::vector<double>{-2.435602, -0.169040, 1.699489, -1.853112,
-        0.175230, 1.871465, -1.571720});
+      std::vector<double>{-2.346649, 0.253827, 1.862806, -1.956540,
+        -0.255224, 1.873248, -1.182563});
     declare_parameter("grasp_offset_xy", std::vector<double>{0.0, 0.0});
     declare_parameter("place_offset_xy", std::vector<double>{0.0, 0.0});
 
@@ -155,6 +179,9 @@ public:
       });
     if (source_mode() != "oracle" && source_mode() != "vision") {
       throw std::runtime_error("source_mode must be 'oracle' or 'vision'");
+    }
+    if (motion_mode() != "cartesian" && motion_mode() != "moveit") {
+      throw std::runtime_error("motion_mode must be 'cartesian' or 'moveit'");
     }
     const std::string state_topic =
       source_mode() == "oracle" ? "/lego_bench/ground_truth" : "/mj_bridge/benchmark_state";
@@ -186,6 +213,11 @@ public:
   std::string source_mode() const
   {
     return get_parameter("source_mode").as_string();
+  }
+
+  std::string motion_mode() const
+  {
+    return get_parameter("motion_mode").as_string();
   }
 
   bool call_reset()
@@ -256,8 +288,10 @@ public:
       task.target.position.y = target["position"][1].as<double>();
       task.target.position.z = target["position"][2].as<double>();
       const double yaw = target["yaw_rad"].as<double>(0.0);
+      task.target_yaw_rad = yaw;
       const double offset = get_parameter("tool_yaw_offset_deg").as_double() * M_PI / 180.0;
-      task.target.orientation = down_orientation(yaw + offset);
+      task.target.orientation = down_orientation(
+        yaw + face_aligned_spin_rad(task.type, task.grasp_spin_deg) + offset);
       result.push_back(task);
     }
     return result;
@@ -284,8 +318,9 @@ public:
     block.pose.position.x = value["position"][0].as<double>();
     block.pose.position.y = value["position"][1].as<double>();
     block.pose.position.z = value["position"][2].as<double>();
+    block.yaw_rad = yaw_from_wxyz(value["quaternion_wxyz"]);
     const double offset = get_parameter("tool_yaw_offset_deg").as_double() * M_PI / 180.0;
-    block.pose.orientation = down_orientation(yaw_from_wxyz(value["quaternion_wxyz"]) + offset);
+    block.pose.orientation = down_orientation(block.yaw_rad + offset);
     return block;
   }
 
@@ -372,6 +407,7 @@ public:
     source.pose.position.y = selected["position"][1].as<double>();
     source.pose.position.z = selected["position"][2].as<double>();
     const double yaw = selected["yaw_rad"].as<double>(0.0);
+    source.yaw_rad = yaw;
     const double offset = get_parameter("tool_yaw_offset_deg").as_double() * M_PI / 180.0;
     source.pose.orientation = down_orientation(yaw + offset);
     {
@@ -516,20 +552,48 @@ bool move_linear_to_pose(
   double speed_scale,
   double acceleration_scale = -1.0);
 
+bool move_axis_aligned_to_pose(
+  ExecutorNode & node,
+  moveit::planning_interface::MoveGroupInterface & arm,
+  const geometry_msgs::msg::Pose & target,
+  double speed_scale,
+  double acceleration_scale = -1.0);
+
 bool move_to_pose(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
   const geometry_msgs::msg::Pose & pose,
   const std::string & label,
-  bool keep_tool_down = false)
+  bool keep_tool_down = false,
+  double payload_scale = 1.0)
 {
+  if (node.motion_mode() == "cartesian") {
+    double speed = node.get_parameter("cartesian_speed_scale").as_double();
+    double acceleration = -1.0;
+    if (label == "preplace") {
+      speed = node.get_parameter("transport_velocity_scale").as_double() * payload_scale;
+      acceleration =
+        node.get_parameter("transport_acceleration_scale").as_double() * payload_scale;
+    }
+    RCLCPP_INFO(
+      node.get_logger(),
+      "%s: direct Cartesian point-to-point motion (speed=%.3f, acceleration=%.3f)",
+      label.c_str(), speed, acceleration);
+    if (keep_tool_down) {
+      return move_axis_aligned_to_pose(node, arm, pose, speed, acceleration);
+    }
+    return move_linear_to_pose(node, arm, pose, speed, acceleration);
+  }
+
   if (keep_tool_down) {
     moveit_msgs::msg::OrientationConstraint orientation;
     orientation.header.frame_id = arm.getPlanningFrame();
     orientation.link_name = arm.getEndEffectorLink();
     orientation.orientation = pose.orientation;
-    orientation.absolute_x_axis_tolerance = 0.45;
-    orientation.absolute_y_axis_tolerance = 0.45;
+    const double tilt_tolerance =
+      node.get_parameter("tool_tilt_tolerance_rad").as_double();
+    orientation.absolute_x_axis_tolerance = tilt_tolerance;
+    orientation.absolute_y_axis_tolerance = tilt_tolerance;
     orientation.absolute_z_axis_tolerance = M_PI;
     orientation.weight = 1.0;
     moveit_msgs::msg::Constraints constraints;
@@ -558,8 +622,20 @@ bool move_to_pose(
     node.get_logger(),
     "%s MoveIt planning failed; trying a direct Cartesian fallback without collision checking",
     label.c_str());
+  double fallback_speed = node.get_parameter("cartesian_speed_scale").as_double();
+  double fallback_acceleration = -1.0;
+  if (label == "preplace") {
+    fallback_speed =
+      node.get_parameter("transport_velocity_scale").as_double() * payload_scale;
+    fallback_acceleration =
+      node.get_parameter("transport_acceleration_scale").as_double() * payload_scale;
+  }
+  if (keep_tool_down) {
+    return move_axis_aligned_to_pose(
+      node, arm, pose, fallback_speed, fallback_acceleration);
+  }
   return move_linear_to_pose(
-    node, arm, pose, node.get_parameter("cartesian_speed_scale").as_double());
+    node, arm, pose, fallback_speed, fallback_acceleration);
 }
 
 bool move_linear_to_pose(
@@ -586,6 +662,41 @@ bool move_linear_to_pose(
   }
   trajectory.getRobotTrajectoryMsg(trajectory_message);
   return arm.execute(trajectory_message) == moveit::core::MoveItErrorCode::SUCCESS;
+}
+
+bool move_axis_aligned_to_pose(
+  ExecutorNode & node,
+  moveit::planning_interface::MoveGroupInterface & arm,
+  const geometry_msgs::msg::Pose & target,
+  double speed_scale,
+  double acceleration_scale)
+{
+  geometry_msgs::msg::Pose waypoint = arm.getCurrentPose().pose;
+  waypoint.orientation = target.orientation;
+  waypoint.position.z = std::max(waypoint.position.z, target.position.z);
+  const double safe_x = std::max({waypoint.position.x, target.position.x, 0.50});
+  RCLCPP_INFO(
+    node.get_logger(),
+    "CARTESIAN_PTP safe_x=%.3f target=(%.3f, %.3f, %.3f)",
+    safe_x, target.position.x, target.position.y, target.position.z);
+
+  if (!move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale)) {
+    return false;
+  }
+  waypoint.position.x = safe_x;
+  if (!move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale)) {
+    return false;
+  }
+  waypoint.position.y = target.position.y;
+  if (!move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale)) {
+    return false;
+  }
+  waypoint.position.x = target.position.x;
+  if (!move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale)) {
+    return false;
+  }
+  waypoint.position.z = target.position.z;
+  return move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale);
 }
 
 bool move_linear(
@@ -618,6 +729,28 @@ bool move_to_observe(
     xyz[0], xyz[1], xyz[2]);
   arm.clearPoseTargets();
   arm.clearPathConstraints();
+
+  if (node.motion_mode() == "cartesian") {
+    geometry_msgs::msg::Pose target = arm.getCurrentPose().pose;
+    target.position.x = xyz[0];
+    target.position.y = xyz[1];
+    target.position.z = xyz[2];
+    target.orientation = down_orientation(M_PI / 2.0);
+    if (!move_axis_aligned_to_pose(
+        node, arm, target, node.get_parameter("cartesian_speed_scale").as_double()))
+    {
+      return false;
+    }
+    const auto reached = arm.getCurrentPose().pose.position;
+    const double error = std::hypot(
+      std::hypot(reached.x - xyz[0], reached.y - xyz[1]), reached.z - xyz[2]);
+    RCLCPP_INFO(
+      node.get_logger(),
+      "OBSERVE_REACHED actual=(%.3f, %.3f, %.3f) error=%.4fm",
+      reached.x, reached.y, reached.z, error);
+    return error <= 0.015;
+  }
+
   const int attempts = node.get_parameter("planning_attempts").as_int();
   for (int attempt = 1; attempt <= attempts; ++attempt) {
     arm.setStartStateToCurrentState();
@@ -626,6 +759,18 @@ bool move_to_observe(
       return false;
     }
     if (arm.move() == moveit::core::MoveItErrorCode::SUCCESS) {
+      const auto reached = arm.getCurrentPose().pose.position;
+      const double error = std::hypot(
+        std::hypot(reached.x - xyz[0], reached.y - xyz[1]), reached.z - xyz[2]);
+      RCLCPP_INFO(
+        node.get_logger(),
+        "OBSERVE_REACHED actual=(%.3f, %.3f, %.3f) error=%.4fm",
+        reached.x, reached.y, reached.z, error);
+      if (error > 0.015) {
+        RCLCPP_ERROR(
+          node.get_logger(), "Fixed observation pose error exceeds 15 mm");
+        return false;
+      }
       std::this_thread::sleep_for(
         std::chrono::duration<double>(node.get_parameter("motion_settle_s").as_double()));
       return true;
@@ -708,6 +853,15 @@ bool execute_task(
     return false;
   }
   geometry_msgs::msg::Pose pregrasp = source.pose;
+  const double aligned_spin = face_aligned_spin_rad(task.type, task.grasp_spin_deg);
+  const double tool_yaw_offset =
+    node.get_parameter("tool_yaw_offset_deg").as_double() * M_PI / 180.0;
+  const double source_tool_yaw = source.yaw_rad + aligned_spin + tool_yaw_offset;
+  const double target_tool_yaw = nearest_symmetric_yaw(
+    source_tool_yaw,
+    task.target_yaw_rad + aligned_spin + tool_yaw_offset,
+    task.type);
+  pregrasp.orientation = down_orientation(source_tool_yaw);
   pregrasp.position.x += grasp_offset[0];
   pregrasp.position.y += grasp_offset[1];
   pregrasp.position.z += gripper_offset + approach;
@@ -715,6 +869,17 @@ bool execute_task(
     node.get_logger(), "[%s] GRASP_CENTER target=(%.4f, %.4f)m offset=(%.4f, %.4f)m",
     task.id.c_str(), source.pose.position.x, source.pose.position.y,
     grasp_offset[0], grasp_offset[1]);
+  RCLCPP_INFO(
+    node.get_logger(),
+    "[%s] GRASP_FACE_ALIGNMENT part_yaw=%.1fdeg face_spin=%.0fdeg tool_yaw=%.1fdeg",
+    task.id.c_str(), source.yaw_rad * 180.0 / M_PI,
+    aligned_spin * 180.0 / M_PI,
+    source_tool_yaw * 180.0 / M_PI);
+  RCLCPP_INFO(
+    node.get_logger(),
+    "[%s] PLACE_FACE_ALIGNMENT equivalent_yaw=%.1fdeg rotation=%.1fdeg",
+    task.id.c_str(), target_tool_yaw * 180.0 / M_PI,
+    (target_tool_yaw - source_tool_yaw) * 180.0 / M_PI);
   RCLCPP_INFO(node.get_logger(), "[%s] MOVE_TO_PREGRASP", task.id.c_str());
   if (!move_to_pose(node, arm, pregrasp, "pregrasp", true)) {
     return false;
@@ -757,7 +922,7 @@ bool execute_task(
   }
 
   geometry_msgs::msg::Pose aligned_for_transport = arm.getCurrentPose().pose;
-  aligned_for_transport.orientation = task.target.orientation;
+  aligned_for_transport.orientation = down_orientation(target_tool_yaw);
   RCLCPP_INFO(node.get_logger(), "[%s] ALIGN_TOOL_FOR_PLACE", task.id.c_str());
   if (!move_linear_to_pose(
       node, arm, aligned_for_transport, rotation_speed * large_part_scale))
@@ -766,6 +931,7 @@ bool execute_task(
   }
 
   geometry_msgs::msg::Pose preplace = task.target;
+  preplace.orientation = down_orientation(target_tool_yaw);
   const auto place_offset = node.get_parameter("place_offset_xy").as_double_array();
   if (place_offset.size() != 2) {
     RCLCPP_ERROR(node.get_logger(), "place_offset_xy must contain two values");
@@ -777,7 +943,8 @@ bool execute_task(
   RCLCPP_INFO(node.get_logger(), "[%s] MOVE_TO_PREPLACE", task.id.c_str());
   arm.setMaxVelocityScalingFactor(transport_velocity * large_part_scale);
   arm.setMaxAccelerationScalingFactor(transport_acceleration * large_part_scale);
-  const bool reached_preplace = move_to_pose(node, arm, preplace, "preplace", true);
+  const bool reached_preplace = move_to_pose(
+    node, arm, preplace, "preplace", true, large_part_scale);
   arm.setMaxVelocityScalingFactor(node.get_parameter("velocity_scale").as_double());
   arm.setMaxAccelerationScalingFactor(node.get_parameter("acceleration_scale").as_double());
   if (!reached_preplace) {
@@ -890,8 +1057,9 @@ int main(int argc, char ** argv)
 
     const auto tasks = node->tasks();
     RCLCPP_INFO(
-      node->get_logger(), "Loaded %zu stable-ID assembly tasks (source_mode=%s)",
-      tasks.size(), node->source_mode().c_str());
+      node->get_logger(),
+      "Loaded %zu stable-ID assembly tasks (source_mode=%s, motion_mode=%s)",
+      tasks.size(), node->source_mode().c_str(), node->motion_mode().c_str());
     bool success = node->command_gripper(node->get_parameter("gripper_open_m").as_double());
     for (std::size_t index = 0; success && index < tasks.size(); ++index) {
       RCLCPP_INFO(
