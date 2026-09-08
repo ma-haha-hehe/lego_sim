@@ -160,6 +160,18 @@ def test_planner_reverses_same_level_disassembly_order():
     assert [step["id"] for step in plan["steps"]] == ["second", "first"]
 
 
+def test_reference_executors_compensate_panda_hand_mount_yaw():
+    repository = Path(__file__).resolve().parents[3]
+    config = yaml.safe_load(
+        (repository / "src/lego_executor/config/executor.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    for node_name in ("oracle_moveit_executor", "visual_moveit_executor"):
+        parameters = config[node_name]["ros__parameters"]
+        assert parameters["tool_yaw_offset_deg"] == 45.0
+
+
 def test_table_contact_resists_robot_scale_downward_force():
     product = normalize_product({"blocks": [
         {"name": "test_block", "type": "brick_2x2", "pos": [0, 0, 0]},

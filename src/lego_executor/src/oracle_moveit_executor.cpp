@@ -72,6 +72,10 @@ struct Task
   geometry_msgs::msg::Pose target;
 };
 
+// With a downward-facing link8, the Panda hand's fixed -45-degree mounting
+// rotation puts the physical finger-closing axis 45 degrees behind link8 yaw.
+constexpr double kPandaFingerAxisFromLink8Rad = -M_PI / 4.0;
+
 geometry_msgs::msg::Quaternion down_orientation(double yaw)
 {
   tf2::Quaternion quaternion;
@@ -165,11 +169,7 @@ public:
       std::vector<std::string>{"groundingdino_sam_foundationpose"});
     declare_parameter(
       "visual_place_correction_excluded_colors", std::vector<std::string>{"white"});
-    declare_parameter("observe_pose_xyz", std::vector<double>{0.45, -0.30, 0.50});
-    declare_parameter(
-      "observe_joint_positions",
-      std::vector<double>{-2.346649, 0.253827, 1.862806, -1.956540,
-        -0.255224, 1.873248, -1.182563});
+    declare_parameter("observe_pose_xyz", std::vector<double>{0.30, 0.10, 0.50});
     declare_parameter("grasp_offset_xy", std::vector<double>{0.0, 0.0});
     declare_parameter("place_offset_xy", std::vector<double>{0.0, 0.0});
 
@@ -763,11 +763,8 @@ bool move_to_observe(
   moveit::planning_interface::MoveGroupInterface & arm)
 {
   const auto xyz = node.get_parameter("observe_pose_xyz").as_double_array();
-  const auto joints = node.get_parameter("observe_joint_positions").as_double_array();
-  if (xyz.size() != 3 || joints.size() != 7) {
-    RCLCPP_ERROR(
-      node.get_logger(),
-      "observe_pose_xyz and observe_joint_positions must contain 3 and 7 values");
+  if (xyz.size() != 3) {
+    RCLCPP_ERROR(node.get_logger(), "observe_pose_xyz must contain three values");
     return false;
   }
   RCLCPP_INFO(
@@ -777,12 +774,13 @@ bool move_to_observe(
   arm.clearPoseTargets();
   arm.clearPathConstraints();
 
+  geometry_msgs::msg::Pose target = arm.getCurrentPose().pose;
+  target.position.x = xyz[0];
+  target.position.y = xyz[1];
+  target.position.z = xyz[2];
+  target.orientation = down_orientation(M_PI / 2.0);
+
   if (node.motion_mode() == "cartesian") {
-    geometry_msgs::msg::Pose target = arm.getCurrentPose().pose;
-    target.position.x = xyz[0];
-    target.position.y = xyz[1];
-    target.position.z = xyz[2];
-    target.orientation = down_orientation(M_PI / 2.0);
     if (!move_axis_aligned_to_pose(
         node, arm, target, node.get_parameter("cartesian_speed_scale").as_double()))
     {
@@ -798,34 +796,21 @@ bool move_to_observe(
     return error <= 0.015;
   }
 
-  const int attempts = node.get_parameter("planning_attempts").as_int();
-  for (int attempt = 1; attempt <= attempts; ++attempt) {
-    arm.setStartStateToCurrentState();
-    if (!arm.setJointValueTarget(joints)) {
-      RCLCPP_ERROR(node.get_logger(), "Fixed observation joint target is invalid");
-      return false;
-    }
-    if (arm.move() == moveit::core::MoveItErrorCode::SUCCESS) {
-      const auto reached = arm.getCurrentPose().pose.position;
-      const double error = std::hypot(
-        std::hypot(reached.x - xyz[0], reached.y - xyz[1]), reached.z - xyz[2]);
-      RCLCPP_INFO(
-        node.get_logger(),
-        "OBSERVE_REACHED actual=(%.3f, %.3f, %.3f) error=%.4fm",
-        reached.x, reached.y, reached.z, error);
-      if (error > 0.015) {
-        RCLCPP_ERROR(
-          node.get_logger(), "Fixed observation pose error exceeds 15 mm");
-        return false;
-      }
-      std::this_thread::sleep_for(
-        std::chrono::duration<double>(node.get_parameter("motion_settle_s").as_double()));
-      return true;
-    }
-    RCLCPP_WARN(
-      node.get_logger(), "observe planning attempt %d/%d failed", attempt, attempts);
+  if (!move_to_pose(node, arm, target, "observation", true)) {
+    return false;
   }
-  return false;
+  const auto reached = arm.getCurrentPose().pose.position;
+  const double error = std::hypot(
+    std::hypot(reached.x - xyz[0], reached.y - xyz[1]), reached.z - xyz[2]);
+  RCLCPP_INFO(
+    node.get_logger(),
+    "OBSERVE_REACHED actual=(%.3f, %.3f, %.3f) error=%.4fm",
+    reached.x, reached.y, reached.z, error);
+  if (error > 0.015) {
+    RCLCPP_ERROR(node.get_logger(), "Fixed observation pose error exceeds 15 mm");
+    return false;
+  }
+  return true;
 }
 
 void add_table(
@@ -911,6 +896,8 @@ bool execute_task(
     source_tool_yaw,
     task.target_yaw_rad + aligned_spin + tool_yaw_offset,
     task.type);
+  const double source_finger_axis_yaw =
+    source_tool_yaw + kPandaFingerAxisFromLink8Rad;
   pregrasp.orientation = down_orientation(source_tool_yaw);
   pregrasp.position.x += grasp_offset[0];
   pregrasp.position.y += grasp_offset[1];
@@ -921,10 +908,12 @@ bool execute_task(
     grasp_offset[0], grasp_offset[1]);
   RCLCPP_INFO(
     node.get_logger(),
-    "[%s] GRASP_FACE_ALIGNMENT part_yaw=%.1fdeg face_spin=%.0fdeg tool_yaw=%.1fdeg",
+    "[%s] GRASP_FACE_ALIGNMENT part_yaw=%.1fdeg face_spin=%.0fdeg "
+    "link8_yaw=%.1fdeg finger_axis_yaw=%.1fdeg",
     task.id.c_str(), source.yaw_rad * 180.0 / M_PI,
     aligned_spin * 180.0 / M_PI,
-    source_tool_yaw * 180.0 / M_PI);
+    source_tool_yaw * 180.0 / M_PI,
+    source_finger_axis_yaw * 180.0 / M_PI);
   RCLCPP_INFO(
     node.get_logger(),
     "[%s] PLACE_FACE_ALIGNMENT equivalent_yaw=%.1fdeg rotation=%.1fdeg",

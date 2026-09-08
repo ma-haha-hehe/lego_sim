@@ -221,8 +221,10 @@ then reverses that list into a bottom-up assembly order. It preserves the YAML
 IDs and direct support relationships. Grasp angles are always either 0 or 90
 degrees in the part's local frame, with 90 degrees preferred when both finger
 corridors are clear. This distinction matters for rectangular 4x2 bricks and is
-not overridden by the executor. The C++ executor then runs this state machine
-for each part:
+not overridden by the executor. The executor also compensates for the Panda
+hand's 45-degree mounting angle, so these values describe the physical
+finger-closing axis rather than the `panda_link8` axis. The C++ executor then
+runs this state machine for each part:
 
 ```text
 move above source

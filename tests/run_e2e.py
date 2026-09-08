@@ -116,7 +116,8 @@ def execution_order(run_dir: Path) -> list[str]:
 
 
 def assert_state_order(log_text: str, block_ids: list[str], visual: bool,
-                       planned_spins: dict[str, int]) -> None:
+                       planned_spins: dict[str, int],
+                       planned_types: dict[str, str]) -> None:
     """Verify every block follows the complete assembly state machine in plan order."""
     cursor = -1
     for block_id in block_ids:
@@ -139,14 +140,18 @@ def assert_state_order(log_text: str, block_ids: list[str], visual: bool,
                     )
                 cursor = position
         alignment_pattern = re.compile(
-            rf"\[{re.escape(block_id)}\] GRASP_FACE_ALIGNMENT .*face_spin=(-?\d+)deg"
+            rf"\[{re.escape(block_id)}\] GRASP_FACE_ALIGNMENT "
+            rf"part_yaw=(-?[\d.]+)deg face_spin=(-?\d+)deg "
+            rf"link8_yaw=(-?[\d.]+)deg finger_axis_yaw=(-?[\d.]+)deg"
         )
         alignment = alignment_pattern.search(log_text, cursor + 1)
         if alignment is None:
             raise EndToEndFailure(
                 f"execution log is missing face-aligned grasp for {block_id}"
             )
-        face_spin = int(alignment.group(1)) % 180
+        part_yaw = float(alignment.group(1))
+        face_spin = int(alignment.group(2)) % 180
+        finger_axis_yaw = float(alignment.group(4))
         if face_spin not in (0, 90):
             raise EndToEndFailure(
                 f"grasp for {block_id} is not aligned with a part face: {face_spin} deg"
@@ -155,6 +160,16 @@ def assert_state_order(log_text: str, block_ids: list[str], visual: bool,
             raise EndToEndFailure(
                 f"executor changed {block_id} grasp spin from "
                 f"{planned_spins[block_id]} to {face_spin} degrees"
+            )
+        symmetry = 90.0 if planned_types[block_id] == "brick_2x2" else 180.0
+        finger_alignment_error = abs(
+            (finger_axis_yaw - part_yaw - face_spin + symmetry / 2.0)
+            % symmetry - symmetry / 2.0
+        )
+        if finger_alignment_error > 1.0:
+            raise EndToEndFailure(
+                f"physical finger axis for {block_id} is {finger_alignment_error:.1f} "
+                "degrees away from the planned part face"
             )
         cursor = alignment.start()
         for state in TASK_STATES:
@@ -389,8 +404,13 @@ def run_case(repo: Path, session_dir: Path, case_name: str, product_name: str,
             str(step["id"]): int(round(float(step["grasp_spin_deg"])))
             for step in plan["steps"]
         }
+        planned_types = {
+            str(step["id"]): str(step["type"])
+            for step in plan["steps"]
+        }
         assert_state_order(
-            log_text, block_ids, case_name == "geometry", planned_spins
+            log_text, block_ids, case_name == "geometry", planned_spins,
+            planned_types
         )
         validate_result(label, case, result, run_dir, block_ids)
         return {

@@ -32,7 +32,9 @@ part's local frame, not the world frame. The commanded world orientation is the
 observed part yaw plus that spin. Clear parts prefer 90 degrees; if that finger
 corridor is occupied, the planner tries 0 degrees. The top-level
 `grasp_angle_frame: part_local` field makes this convention explicit for custom
-executors.
+executors. The reference executor adds the Panda hand's 45-degree fixed-mount
+compensation when commanding `panda_link8`; the resulting physical finger axis
+is therefore parallel to one of the part's two face normals.
 
 Run the reference executor against an already running episode with:
 

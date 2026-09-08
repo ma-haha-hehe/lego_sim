@@ -11,12 +11,13 @@ RGB image -> GroundingDINO -> SAM -> FoundationPose -> world pose
                                                     -> pick-and-place executor
 ```
 
-Before each pick, the Panda returns to a fixed view above the loose-part
-workspace, shifted slightly toward the assembly plate, at approximately
-`[0.45, -0.30, 0.50]`. The visual service then
-processes the newest RGB-D frame, returns the matching source-part pose, and the
-executor runs the normal pick-and-place state machine. Gripper yaw is aligned
-with a detected part face: square bricks may use either orthogonal face pair,
+Before each pick, the Panda returns to a fixed view at the assembly-side edge
+of the loose-part workspace, at approximately `[0.30, 0.10, 0.50]`. This keeps
+the forearm out of the fixed overhead camera's central source view. The visual
+service then processes the newest RGB-D frame, returns the matching source-part
+pose, and the executor runs the normal pick-and-place state machine. Gripper yaw
+is aligned with a detected part face: square bricks may use either orthogonal
+face pair,
 while rectangular bricks use the planner's selected 0- or 90-degree local
 grasp. Transfers use the nearest yaw that is equivalent under the part's 90- or
 180-degree symmetry, which avoids unnecessary wrist rotation while preserving
