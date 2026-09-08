@@ -146,9 +146,10 @@ public:
     declare_parameter("place_acceleration_scale", 0.20);
     declare_parameter("lift_speed_scale", 0.55);
     declare_parameter("transport_rotation_speed_scale", 0.30);
-    declare_parameter("transport_velocity_scale", 0.65);
-    declare_parameter("transport_acceleration_scale", 0.30);
-    declare_parameter("large_part_motion_scale", 1.0);
+    declare_parameter("transport_velocity_scale", 0.95);
+    declare_parameter("transport_acceleration_scale", 0.45);
+    declare_parameter("large_part_motion_scale", 0.65);
+    declare_parameter("large_part_transport_scale", 0.90);
     declare_parameter("gripper_open_m", 0.04);
     declare_parameter("gripper_closed_m", 0.014);
     declare_parameter("gripper_duration_s", 0.35);
@@ -879,6 +880,8 @@ bool execute_task(
     node.get_parameter("transport_acceleration_scale").as_double();
   const double large_part_scale = task.type == "brick_4x2" ?
     node.get_parameter("large_part_motion_scale").as_double() : 1.0;
+  const double transport_part_scale = task.type == "brick_4x2" ?
+    node.get_parameter("large_part_transport_scale").as_double() : 1.0;
 
   const auto grasp_offset = node.get_parameter("grasp_offset_xy").as_double_array();
   if (grasp_offset.size() != 2) {
@@ -980,10 +983,10 @@ bool execute_task(
   preplace.position.y += place_offset[1];
   preplace.position.z += gripper_offset + approach;
   RCLCPP_INFO(node.get_logger(), "[%s] MOVE_TO_PREPLACE", task.id.c_str());
-  arm.setMaxVelocityScalingFactor(transport_velocity * large_part_scale);
-  arm.setMaxAccelerationScalingFactor(transport_acceleration * large_part_scale);
+  arm.setMaxVelocityScalingFactor(transport_velocity * transport_part_scale);
+  arm.setMaxAccelerationScalingFactor(transport_acceleration * transport_part_scale);
   const bool reached_preplace = move_to_pose(
-    node, arm, preplace, "preplace", true, large_part_scale);
+    node, arm, preplace, "preplace", true, transport_part_scale);
   arm.setMaxVelocityScalingFactor(node.get_parameter("velocity_scale").as_double());
   arm.setMaxAccelerationScalingFactor(node.get_parameter("acceleration_scale").as_double());
   if (!reached_preplace) {

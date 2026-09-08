@@ -19,11 +19,12 @@ oracle_moveit_executor:
     # Wrist rotation is the highest torsional load on a held brick. Keep this
     # stage conservative while allowing the translation stages to stay fast.
     transport_rotation_speed_scale: 0.30
-    transport_velocity_scale: 0.65
-    transport_acceleration_scale: 0.12
-    # Long bricks need lower Cartesian acceleration because the contact point
-    # is farther from the part centre than it is for a square brick.
+    transport_velocity_scale: 0.95
+    transport_acceleration_scale: 0.45
+    # Keep rotation and vertical contact conservative for long bricks while
+    # allowing their clear, overhead translation to run close to full speed.
     large_part_motion_scale: 0.65
+    large_part_transport_scale: 0.90
     gripper_open_m: 0.04
     gripper_closed_m: 0.010
     gripper_duration_s: 0.30
@@ -67,10 +68,11 @@ visual_moveit_executor:
     place_acceleration_scale: 0.35
     lift_speed_scale: 0.90
     transport_rotation_speed_scale: 0.30
-    transport_velocity_scale: 0.65
-    transport_acceleration_scale: 0.12
-    # The 4x2 beam has almost twice the mass and a longer moment arm.
+    transport_velocity_scale: 0.95
+    transport_acceleration_scale: 0.45
+    # Keep rotation and vertical contact conservative for the heavier 4x2 beam.
     large_part_motion_scale: 0.65
+    large_part_transport_scale: 0.90
     gripper_open_m: 0.04
     gripper_closed_m: 0.010
     gripper_duration_s: 0.30
