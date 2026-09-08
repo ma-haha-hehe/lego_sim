@@ -138,6 +138,7 @@ public:
     declare_parameter("place_descent_m", 0.155);
     declare_parameter("place_press_depth_m", 0.001);
     declare_parameter("cartesian_speed_scale", 0.30);
+    declare_parameter("grasp_speed_scale", 0.55);
     declare_parameter("place_speed_scale", 0.30);
     declare_parameter("place_acceleration_scale", 0.20);
     declare_parameter("lift_speed_scale", 0.55);
@@ -552,6 +553,13 @@ bool move_linear_to_pose(
   double speed_scale,
   double acceleration_scale = -1.0);
 
+bool move_cartesian_path(
+  ExecutorNode & node,
+  moveit::planning_interface::MoveGroupInterface & arm,
+  const std::vector<geometry_msgs::msg::Pose> & waypoints,
+  double speed_scale,
+  double acceleration_scale = -1.0);
+
 bool move_axis_aligned_to_pose(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
@@ -579,7 +587,7 @@ bool move_to_pose(
       node.get_logger(),
       "%s: direct Cartesian point-to-point motion (speed=%.3f, acceleration=%.3f)",
       label.c_str(), speed, acceleration);
-    if (keep_tool_down) {
+    if (keep_tool_down && label == "preplace") {
       return move_axis_aligned_to_pose(node, arm, pose, speed, acceleration);
     }
     return move_linear_to_pose(node, arm, pose, speed, acceleration);
@@ -645,9 +653,23 @@ bool move_linear_to_pose(
   double speed_scale,
   double acceleration_scale)
 {
+  return move_cartesian_path(node, arm, {target}, speed_scale, acceleration_scale);
+}
+
+bool move_cartesian_path(
+  ExecutorNode & node,
+  moveit::planning_interface::MoveGroupInterface & arm,
+  const std::vector<geometry_msgs::msg::Pose> & waypoints,
+  double speed_scale,
+  double acceleration_scale)
+{
+  if (waypoints.empty()) {
+    return true;
+  }
   arm.setStartStateToCurrentState();
   moveit_msgs::msg::RobotTrajectory trajectory_message;
-  const double fraction = arm.computeCartesianPath({target}, 0.005, 0.0, trajectory_message, false);
+  const double fraction = arm.computeCartesianPath(
+    waypoints, 0.005, 0.0, trajectory_message, false);
   if (fraction < 0.98) {
     RCLCPP_ERROR(node.get_logger(), "Cartesian path incomplete: %.3f", fraction);
     return false;
@@ -672,6 +694,24 @@ bool move_axis_aligned_to_pose(
   double acceleration_scale)
 {
   geometry_msgs::msg::Pose waypoint = arm.getCurrentPose().pose;
+  const geometry_msgs::msg::Pose start = waypoint;
+  std::vector<geometry_msgs::msg::Pose> waypoints;
+  auto append_if_changed = [&waypoints, &start](const geometry_msgs::msg::Pose & candidate) {
+      const auto & previous = waypoints.empty() ? start : waypoints.back();
+      const double translation = std::hypot(
+        std::hypot(
+          candidate.position.x - previous.position.x,
+          candidate.position.y - previous.position.y),
+        candidate.position.z - previous.position.z);
+      const double quaternion_dot = std::abs(
+        candidate.orientation.x * previous.orientation.x +
+        candidate.orientation.y * previous.orientation.y +
+        candidate.orientation.z * previous.orientation.z +
+        candidate.orientation.w * previous.orientation.w);
+      if (translation > 1.0e-6 || quaternion_dot < 1.0 - 1.0e-8) {
+        waypoints.push_back(candidate);
+      }
+    };
   waypoint.orientation = target.orientation;
   waypoint.position.z = std::max(waypoint.position.z, target.position.z);
   const double safe_x = std::max({waypoint.position.x, target.position.x, 0.50});
@@ -680,23 +720,19 @@ bool move_axis_aligned_to_pose(
     "CARTESIAN_PTP safe_x=%.3f target=(%.3f, %.3f, %.3f)",
     safe_x, target.position.x, target.position.y, target.position.z);
 
-  if (!move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale)) {
-    return false;
-  }
+  append_if_changed(waypoint);
   waypoint.position.x = safe_x;
-  if (!move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale)) {
-    return false;
-  }
+  append_if_changed(waypoint);
   waypoint.position.y = target.position.y;
-  if (!move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale)) {
-    return false;
-  }
+  append_if_changed(waypoint);
   waypoint.position.x = target.position.x;
-  if (!move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale)) {
-    return false;
-  }
+  append_if_changed(waypoint);
   waypoint.position.z = target.position.z;
-  return move_linear_to_pose(node, arm, waypoint, speed_scale, acceleration_scale);
+  append_if_changed(waypoint);
+  RCLCPP_INFO(
+    node.get_logger(), "CARTESIAN_PTP executing %zu segments as one trajectory",
+    waypoints.size());
+  return move_cartesian_path(node, arm, waypoints, speed_scale, acceleration_scale);
 }
 
 bool move_linear(
@@ -834,6 +870,7 @@ bool execute_task(
   const double place_descent = node.get_parameter("place_descent_m").as_double();
   const double place_press_depth = node.get_parameter("place_press_depth_m").as_double();
   const double cartesian_speed = node.get_parameter("cartesian_speed_scale").as_double();
+  const double grasp_speed = node.get_parameter("grasp_speed_scale").as_double();
   const double place_speed = node.get_parameter("place_speed_scale").as_double();
   const double place_acceleration =
     node.get_parameter("place_acceleration_scale").as_double();
@@ -856,7 +893,9 @@ bool execute_task(
   const double aligned_spin = face_aligned_spin_rad(task.type, task.grasp_spin_deg);
   const double tool_yaw_offset =
     node.get_parameter("tool_yaw_offset_deg").as_double() * M_PI / 180.0;
-  const double source_tool_yaw = source.yaw_rad + aligned_spin + tool_yaw_offset;
+  const double canonical_source_yaw = nearest_symmetric_yaw(
+    0.0, source.yaw_rad, task.type);
+  const double source_tool_yaw = canonical_source_yaw + aligned_spin + tool_yaw_offset;
   const double target_tool_yaw = nearest_symmetric_yaw(
     source_tool_yaw,
     task.target_yaw_rad + aligned_spin + tool_yaw_offset,
@@ -888,7 +927,7 @@ bool execute_task(
     return false;
   }
   RCLCPP_INFO(node.get_logger(), "[%s] DESCEND_TO_GRASP", task.id.c_str());
-  if (!move_linear(node, arm, -grasp_descent, cartesian_speed)) {
+  if (!move_linear(node, arm, -grasp_descent, grasp_speed)) {
     return false;
   }
   RCLCPP_INFO(node.get_logger(), "[%s] CLOSE_GRIPPER", task.id.c_str());

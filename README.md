@@ -240,6 +240,11 @@ alignment, placement, and retreat are also direct Cartesian segments. Collision
 checking is disabled for these paths. MoveIt still supplies robot kinematics,
 trajectory timing, and execution, but does not choose the route.
 
+The corridor waypoints are timed and sent to the controller as one continuous
+trajectory rather than a series of stop-start actions. Empty moves run at a
+higher speed than contact and payload motions; the latter retain separate
+acceleration limits so long bricks remain stable in the gripper.
+
 Pass `--motion-mode moveit` to restore collision-aware planning for the source
 and target approach poses. The vertical manipulation strokes remain Cartesian
 in both modes. If MoveIt planning fails, the same direct point-to-point route is

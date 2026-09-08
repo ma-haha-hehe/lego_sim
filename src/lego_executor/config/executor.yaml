@@ -4,30 +4,31 @@ oracle_moveit_executor:
     wait_timeout_s: 30.0
     planning_time_s: 10.0
     planning_attempts: 3
-    velocity_scale: 0.75
-    acceleration_scale: 0.75
-    approach_height_m: 0.15
+    velocity_scale: 0.95
+    acceleration_scale: 0.95
+    approach_height_m: 0.10
     gripper_offset_m: 0.1234
-    grasp_descent_m: 0.170
-    place_descent_m: 0.155
+    grasp_descent_m: 0.120
+    place_descent_m: 0.105
     place_press_depth_m: 0.001
-    cartesian_speed_scale: 0.30
-    place_speed_scale: 0.30
-    place_acceleration_scale: 0.20
-    lift_speed_scale: 0.55
+    cartesian_speed_scale: 0.90
+    grasp_speed_scale: 0.55
+    place_speed_scale: 0.65
+    place_acceleration_scale: 0.40
+    lift_speed_scale: 0.90
     # Wrist rotation is the highest torsional load on a held brick. Keep this
     # stage conservative while allowing the translation stages to stay fast.
-    transport_rotation_speed_scale: 0.12
-    transport_velocity_scale: 0.40
-    transport_acceleration_scale: 0.04
+    transport_rotation_speed_scale: 0.30
+    transport_velocity_scale: 0.65
+    transport_acceleration_scale: 0.12
     # Long bricks need lower Cartesian acceleration because the contact point
     # is farther from the part centre than it is for a square brick.
     large_part_motion_scale: 0.65
     gripper_open_m: 0.04
     gripper_closed_m: 0.010
-    gripper_duration_s: 0.40
-    motion_settle_s: 0.10
-    release_settle_s: 0.20
+    gripper_duration_s: 0.30
+    motion_settle_s: 0.02
+    release_settle_s: 0.06
     grasp_confirmation_timeout_s: 5.0
     # With the Panda hand pointing down, its closing axis is 90 degrees from
     # the tool X axis. Zero offset therefore puts both pads parallel to the
@@ -48,33 +49,34 @@ visual_moveit_executor:
     planning_attempts: 2
     velocity_scale: 0.90
     acceleration_scale: 0.90
-    approach_height_m: 0.15
+    approach_height_m: 0.10
     gripper_offset_m: 0.1234
-    grasp_descent_m: 0.170
+    grasp_descent_m: 0.120
     # Continue far enough to guarantee first support contact despite small
     # visual and grasp-height errors. The bridge stops the stroke immediately
     # when the held part touches the plate or an assembled part.
     # The oblique camera corrects XY only. Its lightweight geometry backend
     # estimates a visible surface rather than a reliable object-centre Z, so
     # the calibrated vertical stroke remains independent of visual depth.
-    place_descent_m: 0.1773
+    place_descent_m: 0.1273
     place_press_depth_m: 0.001
-    cartesian_speed_scale: 0.45
+    cartesian_speed_scale: 0.90
+    grasp_speed_scale: 0.55
     # A lower acceleration on the final descent prevents the physically held
     # part from twisting before it reaches the assembly surface.
-    place_speed_scale: 0.40
-    place_acceleration_scale: 0.20
-    lift_speed_scale: 0.65
-    transport_rotation_speed_scale: 0.12
-    transport_velocity_scale: 0.40
-    transport_acceleration_scale: 0.04
+    place_speed_scale: 0.65
+    place_acceleration_scale: 0.35
+    lift_speed_scale: 0.90
+    transport_rotation_speed_scale: 0.30
+    transport_velocity_scale: 0.65
+    transport_acceleration_scale: 0.12
     # The 4x2 beam has almost twice the mass and a longer moment arm.
     large_part_motion_scale: 0.65
     gripper_open_m: 0.04
     gripper_closed_m: 0.010
-    gripper_duration_s: 0.45
-    motion_settle_s: 0.08
-    release_settle_s: 0.15
+    gripper_duration_s: 0.30
+    motion_settle_s: 0.02
+    release_settle_s: 0.06
     tool_yaw_offset_deg: 0.0
     tool_tilt_tolerance_rad: 0.08
     perception_service: /lego_vision/detect

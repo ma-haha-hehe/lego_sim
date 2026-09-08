@@ -22,6 +22,10 @@ which avoids unnecessary wrist rotation while preserving the YAML target.
 The default motion mode uses axis-aligned Cartesian segments through a clear X
 corridor for observation and overhead transfer. Grasp approach, lift,
 placement, and retreat are Cartesian as well, so no OMPL route is generated.
+All corridor segments are executed as one continuous trajectory to avoid a
+controller restart at every corner. The 10 cm approach clearance keeps the
+same calibrated grasp and release endpoints while shortening each vertical
+stroke.
 Use `--motion-mode moveit` to make the original collision-aware planner handle
 observation and overhead transfer; the direct route remains its fallback.
 

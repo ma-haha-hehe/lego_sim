@@ -353,6 +353,10 @@ def run_case(repo: Path, session_dir: Path, case_name: str, product_name: str,
                 raise EndToEndFailure(
                     f"{label}: direct Cartesian motion was not exercised"
                 )
+            if "CARTESIAN_PTP executing" not in log_text:
+                raise EndToEndFailure(
+                    f"{label}: consolidated Cartesian corridor was not exercised"
+                )
             if planning_marker in log_text:
                 raise EndToEndFailure(
                     f"{label}: cartesian mode unexpectedly invoked general planning"
