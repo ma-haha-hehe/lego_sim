@@ -258,6 +258,9 @@ Reference motion speed, Cartesian speed, gripper duration, and the short
 state-publication delays between actions are configured in
 `src/lego_executor/config/executor.yaml`. The defaults provide a fast baseline;
 reduce the speed scales when testing a controller with lower dynamic limits.
+The simulator advances two complete physics/controller frames per display
+frame by default, so the GUI plays the unchanged physical trajectory at roughly
+twice wall-clock speed. Set `MJ_BRIDGE_SIM_SPEED=1` for real-time playback.
 
 The reference executor consumes only the public benchmark topics, actions, and
 services. It is a baseline and an executable integration example, not a required

@@ -163,6 +163,7 @@ RUN_DIR = os.environ.get("LEGO_BENCH_RUN_DIR", "")
 
 SIM_SUBSTEPS = 8
 LOOP_DT = 0.016
+SIM_SPEED_MULTIPLIER = max(1, int(os.environ.get("MJ_BRIDGE_SIM_SPEED", "2")))
 GRASP_CONTACT_HOLD_S = 0.05
 GRASP_AIRBORNE_SETTLE_S = 0.20
 GRASP_MAX_TOOL_TILT_DEG = 3.0
@@ -2084,29 +2085,31 @@ def main():
 
         def run_loop(viewer=None):
             node.simulation_loop_ready.set()
-            node.get_logger().info("Simulation and controller loop is ready")
+            node.get_logger().info(
+                "Simulation and controller loop is ready "
+                f"({SIM_SPEED_MULTIPLIER}x wall-clock target)"
+            )
             try:
                 while rclpy.ok() and (viewer is None or viewer.is_running()):
                     loop_start = time.time()
 
+                    # Advance several complete controller frames before each
+                    # render. This changes wall-clock playback speed without
+                    # changing MuJoCo's timestep or the trajectory dynamics.
+                    for _ in range(SIM_SPEED_MULTIPLIER):
+                        node.update_action_state()
+                        node.update_gripper_target()
 
-                    node.update_action_state()
+                        for _ in range(SIM_SUBSTEPS):
+                            node.step_pid()
+                            node.update_grasp_constraint()
 
+                            if node.connection_mode == "snap":
+                                node.auto_weld_touching_bricks()
+                            if node.connection_mode in {"physics", "snap"}:
+                                node.maintain_fake_welds()
 
-                    node.update_gripper_target()
-
-                    for _ in range(SIM_SUBSTEPS):
-                        node.step_pid()
-
-                        node.update_grasp_constraint()
-
-
-                        if node.connection_mode == "snap":
-                            node.auto_weld_touching_bricks()
-                        if node.connection_mode in {"physics", "snap"}:
-                            node.maintain_fake_welds()
-
-                    node.update_safety_metrics()
+                        node.update_safety_metrics()
 
                     # MuJoCo's OpenGL context is thread-affine, so rendering
                     # stays on this thread. The visual executor requests one
