@@ -149,6 +149,8 @@ public:
     declare_parameter("transport_acceleration_scale", 0.20);
     declare_parameter("large_part_motion_scale", 0.65);
     declare_parameter("large_part_transport_scale", 0.90);
+    declare_parameter("free_motion_time_scale", 0.30);
+    declare_parameter("payload_motion_time_scale", 0.85);
     declare_parameter("gripper_open_m", 0.04);
     declare_parameter("gripper_closed_m", 0.014);
     declare_parameter("gripper_duration_s", 0.35);
@@ -562,14 +564,16 @@ bool move_linear_to_pose(
   moveit::planning_interface::MoveGroupInterface & arm,
   const geometry_msgs::msg::Pose & target,
   double speed_scale,
-  double acceleration_scale = -1.0);
+  double acceleration_scale = -1.0,
+  double time_scale = 1.0);
 
 bool move_cartesian_path(
   ExecutorNode & node,
   moveit::planning_interface::MoveGroupInterface & arm,
   const std::vector<geometry_msgs::msg::Pose> & waypoints,
   double speed_scale,
-  double acceleration_scale = -1.0);
+  double acceleration_scale = -1.0,
+  double time_scale = 1.0);
 
 bool move_to_pose(
   ExecutorNode & node,
@@ -582,16 +586,19 @@ bool move_to_pose(
   if (node.motion_mode() == "cartesian") {
     double speed = node.get_parameter("cartesian_speed_scale").as_double();
     double acceleration = -1.0;
+    double time_scale = node.get_parameter("free_motion_time_scale").as_double();
     if (label == "preplace") {
       speed = node.get_parameter("transport_velocity_scale").as_double() * payload_scale;
       acceleration =
         node.get_parameter("transport_acceleration_scale").as_double() * payload_scale;
+      time_scale = node.get_parameter("payload_motion_time_scale").as_double();
     }
     RCLCPP_INFO(
       node.get_logger(),
-      "%s: direct Cartesian point-to-point motion (speed=%.3f, acceleration=%.3f)",
-      label.c_str(), speed, acceleration);
-    return move_linear_to_pose(node, arm, pose, speed, acceleration);
+      "%s: direct Cartesian point-to-point motion "
+      "(speed=%.3f, acceleration=%.3f, time_scale=%.3f)",
+      label.c_str(), speed, acceleration, time_scale);
+    return move_linear_to_pose(node, arm, pose, speed, acceleration, time_scale);
   }
 
   if (keep_tool_down) {
@@ -633,14 +640,16 @@ bool move_to_pose(
     label.c_str());
   double fallback_speed = node.get_parameter("cartesian_speed_scale").as_double();
   double fallback_acceleration = -1.0;
+  double fallback_time_scale = node.get_parameter("free_motion_time_scale").as_double();
   if (label == "preplace") {
     fallback_speed =
       node.get_parameter("transport_velocity_scale").as_double() * payload_scale;
     fallback_acceleration =
       node.get_parameter("transport_acceleration_scale").as_double() * payload_scale;
+    fallback_time_scale = node.get_parameter("payload_motion_time_scale").as_double();
   }
   return move_linear_to_pose(
-    node, arm, pose, fallback_speed, fallback_acceleration);
+    node, arm, pose, fallback_speed, fallback_acceleration, fallback_time_scale);
 }
 
 bool move_linear_to_pose(
@@ -648,7 +657,8 @@ bool move_linear_to_pose(
   moveit::planning_interface::MoveGroupInterface & arm,
   const geometry_msgs::msg::Pose & target,
   double speed_scale,
-  double acceleration_scale)
+  double acceleration_scale,
+  double time_scale)
 {
   const geometry_msgs::msg::Pose current = arm.getCurrentPose().pose;
   const double translation = std::hypot(
@@ -673,7 +683,8 @@ bool move_linear_to_pose(
     "CARTESIAN_LINE target=(%.3f, %.3f, %.3f) distance=%.3fm rotation=%.1fdeg",
     target.position.x, target.position.y, target.position.z,
     translation, rotation * 180.0 / M_PI);
-  return move_cartesian_path(node, arm, {target}, speed_scale, acceleration_scale);
+  return move_cartesian_path(
+    node, arm, {target}, speed_scale, acceleration_scale, time_scale);
 }
 
 bool move_cartesian_path(
@@ -681,7 +692,8 @@ bool move_cartesian_path(
   moveit::planning_interface::MoveGroupInterface & arm,
   const std::vector<geometry_msgs::msg::Pose> & waypoints,
   double speed_scale,
-  double acceleration_scale)
+  double acceleration_scale,
+  double time_scale)
 {
   if (waypoints.empty()) {
     return true;
@@ -703,6 +715,21 @@ bool move_cartesian_path(
     return false;
   }
   trajectory.getRobotTrajectoryMsg(trajectory_message);
+  const double bounded_time_scale = std::clamp(time_scale, 0.20, 1.0);
+  if (bounded_time_scale < 0.999) {
+    for (auto & point : trajectory_message.joint_trajectory.points) {
+      const double original_time =
+        point.time_from_start.sec + point.time_from_start.nanosec * 1e-9;
+      point.time_from_start = rclcpp::Duration::from_seconds(
+        std::max(0.001, original_time * bounded_time_scale));
+      for (double & velocity : point.velocities) {
+        velocity /= bounded_time_scale;
+      }
+      for (double & acceleration_value : point.accelerations) {
+        acceleration_value /= bounded_time_scale * bounded_time_scale;
+      }
+    }
+  }
   return arm.execute(trajectory_message) == moveit::core::MoveItErrorCode::SUCCESS;
 }
 
@@ -711,11 +738,13 @@ bool move_linear(
   moveit::planning_interface::MoveGroupInterface & arm,
   double z_delta,
   double speed_scale,
-  double acceleration_scale = -1.0)
+  double acceleration_scale = -1.0,
+  double time_scale = 1.0)
 {
   geometry_msgs::msg::Pose target = arm.getCurrentPose().pose;
   target.position.z += z_delta;
-  return move_linear_to_pose(node, arm, target, speed_scale, acceleration_scale);
+  return move_linear_to_pose(
+    node, arm, target, speed_scale, acceleration_scale, time_scale);
 }
 
 bool move_to_observe(
@@ -742,7 +771,8 @@ bool move_to_observe(
 
   if (node.motion_mode() == "cartesian") {
     if (!move_linear_to_pose(
-        node, arm, target, node.get_parameter("cartesian_speed_scale").as_double()))
+        node, arm, target, node.get_parameter("cartesian_speed_scale").as_double(),
+        -1.0, node.get_parameter("free_motion_time_scale").as_double()))
     {
       return false;
     }
@@ -953,7 +983,10 @@ bool execute_task(
     RCLCPP_INFO(
       node.get_logger(), "[%s] ALIGN_CARRIED_BLOCK delta=(%.4f, %.4f, %.4f)m",
       task.id.c_str(), correction_x, correction_y, correction_z);
-    if (!move_linear_to_pose(node, arm, corrected, cartesian_speed)) {
+    if (!move_linear_to_pose(
+        node, arm, corrected, cartesian_speed, -1.0,
+        node.get_parameter("payload_motion_time_scale").as_double()))
+    {
       return false;
     }
   } else if (node.get_parameter("visual_place_correction").as_bool()) {
@@ -999,7 +1032,10 @@ bool execute_task(
           node.get_logger(),
           "[%s] VISUAL_ALIGN_CARRIED_BLOCK iteration=%d/%d delta=(%.4f, %.4f, 0.0000)m",
           task.id.c_str(), iteration + 1, iterations, correction_x, correction_y);
-        if (!move_linear_to_pose(node, arm, corrected, cartesian_speed)) {
+        if (!move_linear_to_pose(
+            node, arm, corrected, cartesian_speed, -1.0,
+            node.get_parameter("payload_motion_time_scale").as_double()))
+        {
           return false;
         }
       }
@@ -1024,7 +1060,9 @@ bool execute_task(
     std::chrono::duration<double>(node.get_parameter("release_settle_s").as_double()));
   add_block(scene, arm.getPlanningFrame(), task.id, task.type, task.target);
   RCLCPP_INFO(node.get_logger(), "[%s] RETREAT", task.id.c_str());
-  return move_linear(node, arm, approach, lift_speed * large_part_scale);
+  return move_linear(
+    node, arm, approach, lift_speed * large_part_scale, -1.0,
+    node.get_parameter("free_motion_time_scale").as_double());
 }
 
 }  // namespace

@@ -22,6 +22,9 @@ oracle_moveit_executor:
     # allowing their clear, overhead translation to run close to full speed.
     large_part_motion_scale: 0.65
     large_part_transport_scale: 0.90
+    # Clear-space motion can run faster than contact-sensitive vertical strokes.
+    free_motion_time_scale: 0.30
+    payload_motion_time_scale: 0.85
     gripper_open_m: 0.04
     gripper_closed_m: 0.010
     gripper_duration_s: 0.30
@@ -69,6 +72,8 @@ visual_moveit_executor:
     # Keep rotation and vertical contact conservative for the heavier 4x2 beam.
     large_part_motion_scale: 0.65
     large_part_transport_scale: 0.90
+    free_motion_time_scale: 0.30
+    payload_motion_time_scale: 0.85
     gripper_open_m: 0.04
     gripper_closed_m: 0.010
     gripper_duration_s: 0.30

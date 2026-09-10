@@ -258,6 +258,10 @@ Reference motion speed, Cartesian speed, gripper duration, and the short
 state-publication delays between actions are configured in
 `src/lego_executor/config/executor.yaml`. The defaults provide a fast baseline;
 reduce the speed scales when testing a controller with lower dynamic limits.
+Clear-space translations and wrist rotations use `free_motion_time_scale`,
+while motion with a grasped part uses the more conservative
+`payload_motion_time_scale`. Contact-sensitive grasp and placement strokes keep
+their time-parameterized duration so faster transit does not weaken the grasp.
 The simulator advances two complete physics/controller frames per display
 frame by default, so the GUI plays the unchanged physical trajectory at roughly
 twice wall-clock speed. Set `MJ_BRIDGE_SIM_SPEED=1` for real-time playback.
