@@ -1863,6 +1863,11 @@ class MuJoCoActionServer(Node):
                 self.grasp_contact_body = body_name
                 self.grasp_contact_since = now
                 return
+            # Establish the carried-part reference only after the fingers
+            # reach their final commanded position. Motion while the pads are
+            # still applying preload is grasp seating, not transport slip.
+            if self.gripper_mode != "close_hold":
+                return
             if (self.grasp_contact_since is None or
                     now - self.grasp_contact_since < GRASP_CONTACT_HOLD_S):
                 return

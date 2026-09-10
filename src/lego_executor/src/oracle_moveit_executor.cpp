@@ -141,19 +141,21 @@ public:
     declare_parameter("place_descent_m", 0.155);
     declare_parameter("place_press_depth_m", 0.001);
     declare_parameter("cartesian_speed_scale", 0.30);
-    declare_parameter("grasp_speed_scale", 0.55);
-    declare_parameter("place_speed_scale", 0.30);
-    declare_parameter("place_acceleration_scale", 0.20);
-    declare_parameter("lift_speed_scale", 0.55);
+    declare_parameter("grasp_speed_scale", 0.80);
+    declare_parameter("place_speed_scale", 0.75);
+    declare_parameter("place_acceleration_scale", 0.40);
+    declare_parameter("lift_speed_scale", 0.90);
     declare_parameter("transport_velocity_scale", 0.95);
     declare_parameter("transport_acceleration_scale", 0.20);
     declare_parameter("large_part_motion_scale", 0.65);
     declare_parameter("large_part_transport_scale", 0.90);
     declare_parameter("free_motion_time_scale", 0.30);
-    declare_parameter("payload_motion_time_scale", 0.85);
+    declare_parameter("payload_motion_time_scale", 0.90);
+    declare_parameter("contact_motion_time_scale", 0.75);
+    declare_parameter("lift_motion_time_scale", 1.0);
     declare_parameter("gripper_open_m", 0.04);
-    declare_parameter("gripper_closed_m", 0.014);
-    declare_parameter("gripper_duration_s", 0.35);
+    declare_parameter("gripper_closed_m", 0.002);
+    declare_parameter("gripper_duration_s", 0.20);
     declare_parameter("motion_settle_s", 0.10);
     declare_parameter("release_settle_s", 0.20);
     declare_parameter("grasp_confirmation_timeout_s", 5.0);
@@ -917,7 +919,10 @@ bool execute_task(
     return false;
   }
   RCLCPP_INFO(node.get_logger(), "[%s] DESCEND_TO_GRASP", task.id.c_str());
-  if (!move_linear(node, arm, -grasp_descent, grasp_speed)) {
+  if (!move_linear(
+      node, arm, -grasp_descent, grasp_speed, -1.0,
+      node.get_parameter("contact_motion_time_scale").as_double()))
+  {
     return false;
   }
   RCLCPP_INFO(node.get_logger(), "[%s] CLOSE_GRIPPER", task.id.c_str());
@@ -935,7 +940,10 @@ bool execute_task(
   arm.attachObject(
     task.id, "panda_hand", {"panda_hand", "panda_leftfinger", "panda_rightfinger", "panda_link8"});
   RCLCPP_INFO(node.get_logger(), "[%s] LIFT", task.id.c_str());
-  if (!move_linear(node, arm, grasp_descent, lift_speed * large_part_scale)) {
+  if (!move_linear(
+      node, arm, grasp_descent, lift_speed * large_part_scale, -1.0,
+      node.get_parameter("lift_motion_time_scale").as_double()))
+  {
     return false;
   }
   std::this_thread::sleep_for(
@@ -1046,7 +1054,8 @@ bool execute_task(
     task.id.c_str(), place_descent);
   if (!move_linear(
       node, arm, -place_descent, place_speed * large_part_scale,
-      place_acceleration * large_part_scale))
+      place_acceleration * large_part_scale,
+      node.get_parameter("contact_motion_time_scale").as_double()))
   {
     return false;
   }

@@ -12,8 +12,8 @@ oracle_moveit_executor:
     place_descent_m: 0.105
     place_press_depth_m: 0.001
     cartesian_speed_scale: 0.90
-    grasp_speed_scale: 0.55
-    place_speed_scale: 0.65
+    grasp_speed_scale: 0.80
+    place_speed_scale: 0.75
     place_acceleration_scale: 0.40
     lift_speed_scale: 0.90
     transport_velocity_scale: 0.95
@@ -24,10 +24,13 @@ oracle_moveit_executor:
     large_part_transport_scale: 0.90
     # Clear-space motion can run faster than contact-sensitive vertical strokes.
     free_motion_time_scale: 0.30
-    payload_motion_time_scale: 0.85
+    payload_motion_time_scale: 0.90
+    # Speed up vertical approach and placement, but keep loaded lift timing nominal.
+    contact_motion_time_scale: 0.75
+    lift_motion_time_scale: 1.0
     gripper_open_m: 0.04
-    gripper_closed_m: 0.010
-    gripper_duration_s: 0.30
+    gripper_closed_m: 0.002
+    gripper_duration_s: 0.20
     motion_settle_s: 0.02
     release_settle_s: 0.06
     grasp_confirmation_timeout_s: 5.0
@@ -61,11 +64,11 @@ visual_moveit_executor:
     place_descent_m: 0.1285
     place_press_depth_m: 0.001
     cartesian_speed_scale: 0.90
-    grasp_speed_scale: 0.55
+    grasp_speed_scale: 0.80
     # A lower acceleration on the final descent prevents the physically held
     # part from twisting before it reaches the assembly surface.
-    place_speed_scale: 0.65
-    place_acceleration_scale: 0.35
+    place_speed_scale: 0.75
+    place_acceleration_scale: 0.40
     lift_speed_scale: 0.90
     transport_velocity_scale: 0.95
     transport_acceleration_scale: 0.20
@@ -73,10 +76,13 @@ visual_moveit_executor:
     large_part_motion_scale: 0.65
     large_part_transport_scale: 0.90
     free_motion_time_scale: 0.30
-    payload_motion_time_scale: 0.85
+    payload_motion_time_scale: 0.90
+    # Contact descent is faster; the conservative lift avoids payload slip.
+    contact_motion_time_scale: 0.75
+    lift_motion_time_scale: 1.0
     gripper_open_m: 0.04
-    gripper_closed_m: 0.010
-    gripper_duration_s: 0.30
+    gripper_closed_m: 0.002
+    gripper_duration_s: 0.20
     motion_settle_s: 0.02
     release_settle_s: 0.06
     # Keep the physical fingers parallel to a detected part's local X/Y axes.
